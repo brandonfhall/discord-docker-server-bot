@@ -34,3 +34,7 @@ jobs:
     # Step 2: Verify the Docker container actually builds
     - name: Build Docker Image
       run: docker build . --file Dockerfile --tag bot-test:latest
+
+    # Step 3: Smoke Test - Verify the container can actually load the bot code
+    - name: Test Container Startup
+      run: docker run --rm -e BOT_TOKEN=test_token -e ALLOWED_CONTAINERS=test_container bot-test:latest python -c "import src.bot; print('Container environment is valid')"
