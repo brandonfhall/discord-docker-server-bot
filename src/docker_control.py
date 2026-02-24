@@ -5,7 +5,7 @@ from typing import Optional
 
 import docker
 
-from .config import ALLOWED_CONTAINERS, IN_GAME_ANNOUNCE_CMD
+from .config import ALLOWED_CONTAINERS, CONTAINER_MESSAGE_CMD
 
 _executor = ThreadPoolExecutor(max_workers=3)
 
@@ -25,15 +25,12 @@ def _get_client():
 
 
 def _find_container_by_name(client, name: str):
-    # match by exact name only (avoid substring matches)
     try:
-        containers = client.containers.list(all=True)
-        for c in containers:
-            if c.name == name:
-                return c
+        return client.containers.get(name)
+    except docker.errors.NotFound:
+        return None
     except Exception:
         return None
-    return None
 
 
 def _check_allowed(name: str) -> bool:
@@ -95,6 +92,19 @@ def container_status(name: str) -> Optional[str]:
     return c.status
 
 
+def _sanitize(msg: str) -> str:
+    if not msg:
+        return ""
+    s = msg.replace("\n", " ").replace("\r", " ")
+    # trim excessive length
+    if len(s) > 200:
+        s = s[:200]
+    # remove shell metacharacters and quotes to prevent injection
+    for ch in [';', '&', '|', '$', '`', '>', '<', '\\', '(', ')', '"', "'"]:
+        s = s.replace(ch, '')
+    return s
+
+
 def announce_in_game(name: str, message: str) -> str:
     if not _check_allowed(name):
         return f"container {name} is not allowed"
@@ -102,36 +112,30 @@ def announce_in_game(name: str, message: str) -> str:
     c = _find_container_by_name(client, name)
     if not c:
         return f"container {name} not found"
-    # Sanitize and limit message to reduce injection risks
-    def _sanitize(msg: str) -> str:
-        if not msg:
-            return ""
-        s = msg.replace("\n", " ").replace("\r", " ")
-        # trim excessive length
-        if len(s) > 200:
-            s = s[:200]
-        # remove shell metacharacters
-        for ch in [';', '&', '|', '$', '`', '>', '<', '\\']:
-            s = s.replace(ch, '')
-        return s
 
     safe_msg = _sanitize(message)
     # Prefer exec_run with argument list (no shell) to avoid shell interpolation
-    # The IN_GAME_ANNOUNCE_CMD should be a template that results in an argv-style command
+    # The CONTAINER_MESSAGE_CMD should be a template that results in an argv-style command
     # If it contains spaces and is intended to be a single shell string, we run via /bin/sh -c
-    if "{message}" in IN_GAME_ANNOUNCE_CMD:
-        cmd = IN_GAME_ANNOUNCE_CMD.format(message=safe_msg)
+    if "{message}" in CONTAINER_MESSAGE_CMD:
+        cmd = CONTAINER_MESSAGE_CMD.format(message=safe_msg)
         try:
             res = c.exec_run(["/bin/sh", "-c", cmd])
-            return f"ok: {res.exit_code}"
+            out = res.output.decode('utf-8').strip()
+            if res.exit_code != 0:
+                return f"error ({res.exit_code}): {out}"
+            return f"ok: {out}" if out else "ok"
         except Exception as e:
             return f"error: {e}"
     else:
         # attempt to split into args; user-provided template should be adjusted to avoid this path
         try:
-            argv = IN_GAME_ANNOUNCE_CMD.split() + [safe_msg]
+            argv = CONTAINER_MESSAGE_CMD.split() + [safe_msg]
             res = c.exec_run(argv)
-            return f"ok: {res.exit_code}"
+            out = res.output.decode('utf-8').strip()
+            if res.exit_code != 0:
+                return f"error ({res.exit_code}): {out}"
+            return f"ok: {out}" if out else "ok"
         except Exception as e:
             return f"error: {e}"
 

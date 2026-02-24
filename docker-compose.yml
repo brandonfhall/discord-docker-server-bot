@@ -12,13 +12,14 @@ services:
       - BOT_TOKEN
       - ALLOWED_CONTAINERS
       - DEFAULT_ALLOWED_ROLES
-      - IN_GAME_ANNOUNCE_CMD
+      - CONTAINER_MESSAGE_CMD
       - STATUS_PORT
       - SHUTDOWN_DELAY
       - LOG_LEVEL
       - DISCORD_GUILD_ID
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
+      # NOTE: Ensure permissions.json exists on host before starting, or Docker creates it as a directory
       - ./permissions.json:/app/permissions.json
     restart: unless-stopped
     ports:

@@ -9,7 +9,7 @@ ALLOWED_CONTAINERS = [c.strip() for c in os.getenv("ALLOWED_CONTAINERS", "").spl
 
 DEFAULT_ALLOWED_ROLES = [r.strip() for r in os.getenv("DEFAULT_ALLOWED_ROLES", "ServerAdmin").split(",") if r.strip()]
 
-IN_GAME_ANNOUNCE_CMD = os.getenv("IN_GAME_ANNOUNCE_CMD", "screen -S valheim -p 0 -X stuff \"say {message}\\015\"")
+CONTAINER_MESSAGE_CMD = os.getenv("CONTAINER_MESSAGE_CMD", "echo \"Message: {message}\"")
 
 STATUS_PORT = int(os.getenv("STATUS_PORT", "8000"))
 

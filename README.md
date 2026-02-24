@@ -20,7 +20,13 @@ This project provides a Dockerized Discord bot to manage a container running in 
 
 1. **Clone the repository** and navigate to the directory.
 
-2. **Configure `docker-compose.yml`**:
+2. **Create Permissions File**:
+   Create an empty JSON file to store permissions.
+   ```bash
+   echo "{}" > permissions.json
+   ```
+
+3. **Configure `docker-compose.yml`**:
    Ensure the environment variables are set correctly. You can modify the `environment` section in `docker-compose.yml` or use an `.env` file.
 
    | Variable | Description | Default |
@@ -29,12 +35,12 @@ This project provides a Dockerized Discord bot to manage a container running in 
    | `ALLOWED_CONTAINERS` | Comma-separated list of container names the bot can control. | - |
    | `DEFAULT_ALLOWED_ROLES` | Comma-separated list of Discord role names allowed to use control commands initially. | `ServerAdmin` |
    | `DISCORD_GUILD_ID` | **Recommended**. The ID of your Discord server. If set, the bot ignores commands from other servers/DMs. | `0` (Disabled) |
-   | `IN_GAME_ANNOUNCE_CMD` | Shell command to send a message to the game server. Defaults to Valheim screen command. | `screen -S valheim ...` |
+   | `CONTAINER_MESSAGE_CMD` | Shell command to send a message to the container. | `echo "Message: {message}"` |
    | `SHUTDOWN_DELAY` | Time in seconds to wait between announcement and action. | `300` (5 mins) |
    | `STATUS_PORT` | Port for the local HTTP status API. | `8000` |
    | `LOG_LEVEL` | Logging verbosity (`INFO`, `DEBUG`, etc.). | `INFO` |
 
-3. **Run the Bot**:
+4. **Run the Bot**:
    ```bash
    docker compose up -d --build
    ```
