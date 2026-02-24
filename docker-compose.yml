@@ -1,0 +1,25 @@
+version: '3.8'
+services:
+  valheim-server:
+    image: your-valheim-image:latest
+    container_name: valheim_server
+    # configure volumes/ports as you normally would for your server
+
+  valheim-bot:
+    build: .
+    container_name: valheim_bot
+    environment:
+      - BOT_TOKEN
+      - ALLOWED_CONTAINERS
+      - DEFAULT_ALLOWED_ROLES
+      - IN_GAME_ANNOUNCE_CMD
+      - STATUS_PORT
+      - SHUTDOWN_DELAY
+      - LOG_LEVEL
+      - DISCORD_GUILD_ID
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - ./permissions.json:/app/permissions.json
+    restart: unless-stopped
+    ports:
+      - "8000:8000" # status endpoint
