@@ -1,4 +1,5 @@
 import asyncio
+import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
 
@@ -7,6 +8,16 @@ import docker
 from .config import ALLOWED_CONTAINERS, IN_GAME_ANNOUNCE_CMD
 
 _executor = ThreadPoolExecutor(max_workers=3)
+
+# Validate container names: alphanumeric, underscore, dot, hyphen only
+_VALID_CONTAINER_NAME = re.compile(r'^[a-zA-Z0-9_.-]+$')
+
+
+def _validate_container_name(name: str) -> bool:
+    """Check if container name is valid (alphanumeric, underscore, dot, hyphen)."""
+    if not name or not isinstance(name, str) or len(name) > 255:
+        return False
+    return _VALID_CONTAINER_NAME.match(name) is not None
 
 
 def _get_client():
@@ -26,6 +37,8 @@ def _find_container_by_name(client, name: str):
 
 
 def _check_allowed(name: str) -> bool:
+    if not _validate_container_name(name):
+        return False
     if not ALLOWED_CONTAINERS:
         return False
     return name in ALLOWED_CONTAINERS
@@ -71,6 +84,8 @@ def restart_container(name: str, timeout: int = 10) -> str:
 
 
 def container_status(name: str) -> Optional[str]:
+    if not _check_allowed(name):
+        return None
     client = _get_client()
     c = _find_container_by_name(client, name)
     if not c:
