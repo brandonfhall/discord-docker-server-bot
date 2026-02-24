@@ -59,6 +59,8 @@ async def on_ready():
 @bot.command()
 @has_permission("start")
 async def start(ctx, container_name: str):
+    if container_name not in ALLOWED_CONTAINERS:
+        return
     await ctx.send(f"Starting {container_name}...")
     res = await docker_control.run_blocking(docker_control.start_container, container_name)
     await ctx.send(res)
@@ -67,6 +69,8 @@ async def start(ctx, container_name: str):
 @bot.command()
 @has_permission("stop")
 async def stop(ctx, container_name: str):
+    if container_name not in ALLOWED_CONTAINERS:
+        return
     await ctx.send(f"Server will stop in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     # announce immediately
     msg = f"Server will shut down in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
@@ -87,6 +91,8 @@ async def stop(ctx, container_name: str):
 @bot.command()
 @has_permission("restart")
 async def restart(ctx, container_name: str):
+    if container_name not in ALLOWED_CONTAINERS:
+        return
     await ctx.send(f"Server will restart in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     msg = f"Server will restart in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
     await ctx.send(msg)
@@ -102,6 +108,8 @@ async def restart(ctx, container_name: str):
 
 @bot.command(name="status")
 async def status_cmd(ctx, container_name: str = None):
+    if container_name and container_name not in ALLOWED_CONTAINERS:
+        return
     target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
     if not target:
         await ctx.send("No container configured")

@@ -13,6 +13,8 @@ CONTAINER_MESSAGE_CMD = os.getenv("CONTAINER_MESSAGE_CMD", "echo \"Message: {mes
 
 STATUS_PORT = int(os.getenv("STATUS_PORT", "8000"))
 
+DOCKER_MAX_WORKERS = int(os.getenv("DOCKER_MAX_WORKERS", "2"))
+
 SHUTDOWN_DELAY = int(os.getenv("SHUTDOWN_DELAY", "300"))
 
 PERMISSIONS_FILE = os.getenv("PERMISSIONS_FILE", "permissions.json")

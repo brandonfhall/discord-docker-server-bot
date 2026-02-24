@@ -5,9 +5,9 @@ from typing import Optional
 
 import docker
 
-from .config import ALLOWED_CONTAINERS, CONTAINER_MESSAGE_CMD
+from .config import ALLOWED_CONTAINERS, CONTAINER_MESSAGE_CMD, DOCKER_MAX_WORKERS
 
-_executor = ThreadPoolExecutor(max_workers=3)
+_executor = ThreadPoolExecutor(max_workers=DOCKER_MAX_WORKERS)
 
 # Validate container names: alphanumeric, underscore, dot, hyphen only
 _VALID_CONTAINER_NAME = re.compile(r'^[a-zA-Z0-9_.-]+$')
@@ -20,8 +20,14 @@ def _validate_container_name(name: str) -> bool:
     return _VALID_CONTAINER_NAME.match(name) is not None
 
 
+# Global client instance to avoid re-initializing connection on every request
+_docker_client = None
+
 def _get_client():
-    return docker.from_env()
+    global _docker_client
+    if _docker_client is None:
+        _docker_client = docker.from_env()
+    return _docker_client
 
 
 def _find_container_by_name(client, name: str):
