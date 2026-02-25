@@ -8,7 +8,6 @@ services:
   valheim-bot:
     build: .
     container_name: discord_bot
-    command: python -m src.bot
     environment:
       - BOT_TOKEN
       - ALLOWED_CONTAINERS
@@ -19,10 +18,11 @@ services:
       - SHUTDOWN_DELAY
       - LOG_LEVEL
       - DISCORD_GUILD_ID
+      - PERMISSIONS_FILE
+      - LOG_FILE
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock:ro
-      # NOTE: Ensure permissions.json exists on host before starting, or Docker creates it as a directory
-      - ./permissions.json:/app/permissions.json
+      - ./data:/app/data
     restart: unless-stopped
     ports:
       - "8000:8000" # status endpoint

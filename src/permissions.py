@@ -1,4 +1,5 @@
 import json
+import logging
 import os
 from typing import Dict, List
 
@@ -6,12 +7,17 @@ from .config import PERMISSIONS_FILE, DEFAULT_ALLOWED_ROLES
 
 
 def _ensure_file():
+    # Ensure directory exists
+    directory = os.path.dirname(PERMISSIONS_FILE)
+    if directory and not os.path.exists(directory):
+        os.makedirs(directory)
+
     if not os.path.exists(PERMISSIONS_FILE):
+        logging.info(f"Initializing permissions file at: {os.path.abspath(PERMISSIONS_FILE)}")
         data = {
             "start": DEFAULT_ALLOWED_ROLES,
             "stop": DEFAULT_ALLOWED_ROLES,
             "restart": DEFAULT_ALLOWED_ROLES,
-            "announce": DEFAULT_ALLOWED_ROLES,
         }
         with open(PERMISSIONS_FILE, "w") as f:
             json.dump(data, f, indent=2)

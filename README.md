@@ -20,13 +20,10 @@ This project provides a Dockerized Discord bot to manage a container running in 
 
 1. **Clone the repository** and navigate to the directory.
 
-2. **Create Permissions File**:
-   Create an empty JSON file to store permissions.
-   ```bash
-   echo "{}" > permissions.json
-   ```
+2. **Prepare Data Directory**:
+   The bot will automatically create a `data/` directory and a `permissions.json` file on the first run.
 
-3. **Configure `docker-compose.yml`**:
+3. **Configure Environment**:
    Ensure the environment variables are set correctly. You can modify the `environment` section in `docker-compose.yml` or use an `.env` file.
 
    | Variable | Description | Default |

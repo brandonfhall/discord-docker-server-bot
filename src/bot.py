@@ -9,11 +9,21 @@ import discord
 from discord.ext import commands
 
 from . import docker_control
-from .config import BOT_TOKEN, STATUS_PORT, SHUTDOWN_DELAY, ALLOWED_CONTAINERS, DISCORD_GUILD_ID
+from .config import BOT_TOKEN, STATUS_PORT, SHUTDOWN_DELAY, ALLOWED_CONTAINERS, DISCORD_GUILD_ID, LOG_FILE
 from . import permissions
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=LOG_LEVEL)
+
+# Ensure log directory exists
+log_dir = os.path.dirname(LOG_FILE)
+if log_dir and not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(), logging.FileHandler(LOG_FILE)]
+)
 
 app = FastAPI()
 
@@ -54,11 +64,14 @@ def has_permission(action: str):
 @bot.event
 async def on_ready():
     print(f"Bot ready: {bot.user} at {datetime.utcnow().isoformat()} UTC")
+    logging.info(f"Logging to file: {os.path.abspath(LOG_FILE)}")
+    logging.info(f"Permissions file: {os.path.abspath(permissions.PERMISSIONS_FILE)}")
 
 
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure):
+        logging.warning(f"Permission denied for user {ctx.author} on command {ctx.command}")
         await ctx.send("You do not have permission to use this command.")
     elif isinstance(error, commands.CommandNotFound):
         pass
@@ -75,8 +88,10 @@ async def start(ctx, container_name: str = None):
     if target not in ALLOWED_CONTAINERS:
         await ctx.send(f"Container {target} is not allowed.")
         return
+    logging.info(f"User {ctx.author} requested START for container '{target}'")
     await ctx.send(f"Starting {target}...")
     res = await docker_control.run_blocking(docker_control.start_container, target)
+    logging.info(f"START result for {ctx.author}: {res}")
     await ctx.send(res)
 
 
@@ -90,6 +105,7 @@ async def stop(ctx, container_name: str = None):
     if target not in ALLOWED_CONTAINERS:
         await ctx.send(f"Container {target} is not allowed.")
         return
+    logging.info(f"User {ctx.author} requested STOP for container '{target}'")
     await ctx.send(f"Server {target} will stop in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     # announce immediately
     msg = f"Server will shut down in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
@@ -102,6 +118,7 @@ async def stop(ctx, container_name: str = None):
     async def do_stop():
         await asyncio.sleep(SHUTDOWN_DELAY)
         result = await docker_control.run_blocking(docker_control.stop_container, target)
+        logging.info(f"STOP execution result for {target}: {result}")
         await ctx.send(f"Stop result: {result}")
 
     bot.loop.create_task(do_stop())
@@ -117,6 +134,7 @@ async def restart(ctx, container_name: str = None):
     if target not in ALLOWED_CONTAINERS:
         await ctx.send(f"Container {target} is not allowed.")
         return
+    logging.info(f"User {ctx.author} requested RESTART for container '{target}'")
     await ctx.send(f"Server {target} will restart in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     msg = f"Server will restart in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
     await ctx.send(msg)
@@ -125,6 +143,7 @@ async def restart(ctx, container_name: str = None):
     async def do_restart():
         await asyncio.sleep(SHUTDOWN_DELAY)
         result = await docker_control.run_blocking(docker_control.restart_container, target)
+        logging.info(f"RESTART execution result for {target}: {result}")
         await ctx.send(f"Restart result: {result}")
 
     bot.loop.create_task(do_restart())
@@ -138,6 +157,7 @@ async def status_cmd(ctx, container_name: str = None):
     if not target:
         await ctx.send("No container configured")
         return
+    logging.info(f"User {ctx.author} requested STATUS for container '{target}'")
     res = await docker_control.run_blocking(docker_control.container_status, target)
     await ctx.send(f"Status for {target}: {res}")
 
@@ -152,12 +172,14 @@ async def perm(ctx):
 @perm.command(name="add")
 async def perm_add(ctx, action: str, *, role_name: str):
     permissions.add_role(action, role_name)
+    logging.info(f"User {ctx.author} ADDED role '{role_name}' to action '{action}'")
     await ctx.send(f"Added role {role_name} to {action}")
 
 
 @perm.command(name="remove")
 async def perm_remove(ctx, action: str, *, role_name: str):
     permissions.remove_role(action, role_name)
+    logging.info(f"User {ctx.author} REMOVED role '{role_name}' from action '{action}'")
     await ctx.send(f"Removed role {role_name} from {action}")
 
 
