@@ -46,6 +46,9 @@ This project provides a Dockerized Discord bot to manage a container running in 
 
 Prefix: `!`
 
+### General
+- `!guide`: Shows a simple usage guide.
+
 ### Control Commands
 Requires specific permissions (default: `ServerAdmin` role).
 
@@ -68,4 +71,7 @@ Requires `Administrator` permission in Discord.
 The bot exposes a simple JSON API on port `8000` (mapped in docker-compose).
 
 **GET /status**
-Returns the status of all allowed containers.
+Returns a JSON object containing:
+- `containers`: Status of the allowed container.
+- `permissions`: Current role permissions.
+- `logs`: The most recent 50 log lines.

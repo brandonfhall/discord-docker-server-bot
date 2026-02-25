@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime
+from collections import deque
 
 import uvicorn
 from fastapi import FastAPI
@@ -33,7 +34,26 @@ def status():
     out = {}
     for name in ALLOWED_CONTAINERS:
         out[name] = docker_control.container_status(name)
-    return {"ok": True, "containers": out}
+
+    # Get current permissions
+    current_perms = permissions.list_permissions()
+
+    # Get recent logs (last 50 lines)
+    recent_logs = []
+    if os.path.exists(LOG_FILE):
+        try:
+            with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                recent_logs = list(deque(f, maxlen=50))
+                recent_logs = [line.strip() for line in recent_logs]
+        except Exception as e:
+            recent_logs = [f"Error reading logs: {e}"]
+
+    return {
+        "ok": True,
+        "containers": out,
+        "permissions": current_perms,
+        "logs": recent_logs
+    }
 
 
 intents = discord.Intents.default()
@@ -81,6 +101,7 @@ async def on_command_error(ctx, error):
 @bot.command()
 @has_permission("start")
 async def start(ctx, container_name: str = None):
+    """Starts the container."""
     target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
     if not target:
         await ctx.send("No container specified.")
@@ -98,6 +119,7 @@ async def start(ctx, container_name: str = None):
 @bot.command()
 @has_permission("stop")
 async def stop(ctx, container_name: str = None):
+    """Stops the container (with countdown)."""
     target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
     if not target:
         await ctx.send("No container specified.")
@@ -127,6 +149,7 @@ async def stop(ctx, container_name: str = None):
 @bot.command()
 @has_permission("restart")
 async def restart(ctx, container_name: str = None):
+    """Restarts the container (with countdown)."""
     target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
     if not target:
         await ctx.send("No container specified.")
@@ -151,6 +174,7 @@ async def restart(ctx, container_name: str = None):
 
 @bot.command(name="status")
 async def status_cmd(ctx, container_name: str = None):
+    """Checks the container status."""
     if container_name and container_name not in ALLOWED_CONTAINERS:
         return
     target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
@@ -162,15 +186,39 @@ async def status_cmd(ctx, container_name: str = None):
     await ctx.send(f"Status for {target}: {res}")
 
 
+@bot.command(name="guide")
+async def guide(ctx):
+    """Shows a simple usage guide."""
+    lines = [
+        "**Valheim Bot Guide**",
+        "Use `!help` for detailed command usage.",
+        "",
+        "**Control**",
+        "`!start`   : Start the server",
+        "`!stop`    : Stop the server (with delay)",
+        "`!restart` : Restart the server (with delay)",
+        "`!status`  : Show server status",
+        "",
+        "**Permissions** (Admins)",
+        "`!perm list`   : List allowed roles",
+        "`!perm add`    : Add role to action",
+        "`!perm remove` : Remove role from action"
+    ]
+    logging.info(f"User {ctx.author} requested GUIDE")
+    await ctx.send("\n".join(lines))
+
+
 @bot.group()
 @commands.has_permissions(administrator=True)
 async def perm(ctx):
+    """Manages permissions (Admins only)."""
     if ctx.invoked_subcommand is None:
         await ctx.send("subcommands: add, remove, list")
 
 
 @perm.command(name="add")
 async def perm_add(ctx, action: str, *, role_name: str):
+    """Adds a role to an action."""
     permissions.add_role(action, role_name)
     logging.info(f"User {ctx.author} ADDED role '{role_name}' to action '{action}'")
     await ctx.send(f"Added role {role_name} to {action}")
@@ -178,6 +226,7 @@ async def perm_add(ctx, action: str, *, role_name: str):
 
 @perm.command(name="remove")
 async def perm_remove(ctx, action: str, *, role_name: str):
+    """Removes a role from an action."""
     permissions.remove_role(action, role_name)
     logging.info(f"User {ctx.author} REMOVED role '{role_name}' from action '{action}'")
     await ctx.send(f"Removed role {role_name} from {action}")
@@ -185,6 +234,8 @@ async def perm_remove(ctx, action: str, *, role_name: str):
 
 @perm.command(name="list")
 async def perm_list(ctx):
+    """Lists all permissions."""
+    logging.info(f"User {ctx.author} requested PERM LIST")
     data = permissions.list_permissions()
     lines = [f"{k}: {', '.join(v)}" for k, v in data.items()]
     await ctx.send("\n".join(lines))
