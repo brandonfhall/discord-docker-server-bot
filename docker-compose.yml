@@ -1,13 +1,14 @@
-version: '3.8'
 services:
   valheim-server:
-    image: your-valheim-image:latest
+    image: alpine:latest
+    command: tail -f /dev/null
     container_name: valheim_server
     # configure volumes/ports as you normally would for your server
 
   valheim-bot:
     build: .
-    container_name: valheim_bot
+    container_name: discord_bot
+    command: python -m src.bot
     environment:
       - BOT_TOKEN
       - ALLOWED_CONTAINERS

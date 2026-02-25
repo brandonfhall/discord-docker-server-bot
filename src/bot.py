@@ -56,33 +56,52 @@ async def on_ready():
     print(f"Bot ready: {bot.user} at {datetime.utcnow().isoformat()} UTC")
 
 
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CheckFailure):
+        await ctx.send("You do not have permission to use this command.")
+    elif isinstance(error, commands.CommandNotFound):
+        pass
+    else:
+        logging.error(f"Command error: {error}", exc_info=True)
+
 @bot.command()
 @has_permission("start")
-async def start(ctx, container_name: str):
-    if container_name not in ALLOWED_CONTAINERS:
+async def start(ctx, container_name: str = None):
+    target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
+    if not target:
+        await ctx.send("No container specified.")
         return
-    await ctx.send(f"Starting {container_name}...")
-    res = await docker_control.run_blocking(docker_control.start_container, container_name)
+    if target not in ALLOWED_CONTAINERS:
+        await ctx.send(f"Container {target} is not allowed.")
+        return
+    await ctx.send(f"Starting {target}...")
+    res = await docker_control.run_blocking(docker_control.start_container, target)
     await ctx.send(res)
 
 
 @bot.command()
 @has_permission("stop")
-async def stop(ctx, container_name: str):
-    if container_name not in ALLOWED_CONTAINERS:
+async def stop(ctx, container_name: str = None):
+    target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
+    if not target:
+        await ctx.send("No container specified.")
         return
-    await ctx.send(f"Server will stop in {SHUTDOWN_DELAY//60} minutes (countdown started).")
+    if target not in ALLOWED_CONTAINERS:
+        await ctx.send(f"Container {target} is not allowed.")
+        return
+    await ctx.send(f"Server {target} will stop in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     # announce immediately
     msg = f"Server will shut down in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
     # announce in discord channel
     await ctx.send(msg)
     # announce in-game
-    await docker_control.run_blocking(docker_control.announce_in_game, container_name, msg)
+    await docker_control.run_blocking(docker_control.announce_in_game, target, msg)
 
     # schedule stop
     async def do_stop():
         await asyncio.sleep(SHUTDOWN_DELAY)
-        result = await docker_control.run_blocking(docker_control.stop_container, container_name)
+        result = await docker_control.run_blocking(docker_control.stop_container, target)
         await ctx.send(f"Stop result: {result}")
 
     bot.loop.create_task(do_stop())
@@ -90,17 +109,22 @@ async def stop(ctx, container_name: str):
 
 @bot.command()
 @has_permission("restart")
-async def restart(ctx, container_name: str):
-    if container_name not in ALLOWED_CONTAINERS:
+async def restart(ctx, container_name: str = None):
+    target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
+    if not target:
+        await ctx.send("No container specified.")
         return
-    await ctx.send(f"Server will restart in {SHUTDOWN_DELAY//60} minutes (countdown started).")
+    if target not in ALLOWED_CONTAINERS:
+        await ctx.send(f"Container {target} is not allowed.")
+        return
+    await ctx.send(f"Server {target} will restart in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     msg = f"Server will restart in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
     await ctx.send(msg)
-    await docker_control.run_blocking(docker_control.announce_in_game, container_name, msg)
+    await docker_control.run_blocking(docker_control.announce_in_game, target, msg)
 
     async def do_restart():
         await asyncio.sleep(SHUTDOWN_DELAY)
-        result = await docker_control.run_blocking(docker_control.restart_container, container_name)
+        result = await docker_control.run_blocking(docker_control.restart_container, target)
         await ctx.send(f"Restart result: {result}")
 
     bot.loop.create_task(do_restart())

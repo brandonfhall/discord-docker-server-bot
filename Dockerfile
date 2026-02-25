@@ -4,16 +4,12 @@ WORKDIR /app
 
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
+# Fix for "Not supported URL scheme http+docker" error with requests 2.32.0+
+RUN pip install "requests<2.32.0"
 
 COPY src/ ./src/
-
-# Create a non-root user for safer runtime
-RUN addgroup --system botgroup && adduser --system --ingroup botgroup botuser
-RUN chown -R botuser:botgroup /app
 
 ENV PYTHONDONTWRITEBYTECODE=1
 ENV PYTHONUNBUFFERED=1
 
-USER botuser
-
-CMD ["python", "-u", "src/bot.py"]
+CMD ["python", "-m", "src.bot"]

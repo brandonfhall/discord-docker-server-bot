@@ -1,10 +1,10 @@
 # Valheim Docker Controller Discord Bot
 
-This project provides a Dockerized Discord bot to manage a container running in Docker. It allows you to start, stop, and restart the server from Discord, handles in-game shutdown announcements, and manages permissions via Discord roles.
+This project provides a Dockerized Discord bot to manage a container running in Docker. It allows you to start, stop, and restart the server from Discord, handles in-game shutdown announcements, and manages permissions via Discord roles. Designed to control a single specific container.
 
 ## Features
 
-- **Container Control**: Start, Stop, and Restart specific Docker containers.
+- **Container Control**: Start, Stop, and Restart the Docker container.
 - **Graceful Shutdowns**: Automatically announces shutdowns/restarts in-game and waits for a configurable delay before stopping the container.
 - **Permission System**: Restrict commands to specific Discord roles. Admins can manage these permissions dynamically.
 - **Guild Locking**: Restrict the bot to a specific Discord server for security.
@@ -32,7 +32,7 @@ This project provides a Dockerized Discord bot to manage a container running in 
    | Variable | Description | Default |
    | :--- | :--- | :--- |
    | `BOT_TOKEN` | **Required**. Your Discord Bot Token. | - |
-   | `ALLOWED_CONTAINERS` | Comma-separated list of container names the bot can control. | - |
+   | `ALLOWED_CONTAINERS` | The name of the container this bot controls. | - |
    | `DEFAULT_ALLOWED_ROLES` | Comma-separated list of Discord role names allowed to use control commands initially. | `ServerAdmin` |
    | `DISCORD_GUILD_ID` | **Recommended**. The ID of your Discord server. If set, the bot ignores commands from other servers/DMs. | `0` (Disabled) |
    | `CONTAINER_MESSAGE_CMD` | Shell command to send a message to the container. | `echo "Message: {message}"` |
@@ -52,18 +52,18 @@ Prefix: `!`
 ### Control Commands
 Requires specific permissions (default: `ServerAdmin` role).
 
-- `!start <container_name>`: Starts the specified container.
-- `!stop <container_name>`: Announces shutdown, waits for delay, then stops the container.
-- `!restart <container_name>`: Announces restart, waits for delay, then restarts the container.
+- `!start`: Starts the container.
+- `!stop`: Announces shutdown, waits for delay, then stops the container.
+- `!restart`: Announces restart, waits for delay, then restarts the container.
 
 ### Status
-- `!status [container_name]`: Shows the current status (running, exited, etc.) of the container. If no name is provided, checks the first allowed container.
+- `!status`: Shows the current status (running, exited, etc.) of the container.
 
 ### Permission Management
 Requires `Administrator` permission in Discord.
 
 - `!perm list`: Lists all roles allowed to perform specific actions.
-- `!perm add <action> <role_name>`: Grants a role permission for an action (actions: `start`, `stop`, `restart`, `announce`).
+- `!perm add <action> <role_name>`: Grants a role permission for an action (actions: `start`, `stop`, `restart`).
 - `!perm remove <action> <role_name>`: Revokes permission.
 
 ## HTTP API
