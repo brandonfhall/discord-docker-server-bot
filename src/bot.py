@@ -267,7 +267,7 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
 async def guide(ctx):
     """Shows a simple usage guide."""
     lines = [
-        "**Valheim Bot Guide**",
+        "**Docker Bot Guide**",
         "Use `!help` for detailed command usage.",
         "",
         "**Control**",

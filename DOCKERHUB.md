@@ -32,7 +32,7 @@ services:
       - ./bot-data:/app/data
     environment:
       - BOT_TOKEN=your_discord_bot_token
-      - ALLOWED_CONTAINERS=valheim_server
+      - ALLOWED_CONTAINERS=my_game_server
       - DEFAULT_ALLOWED_ROLES=ServerAdmin
       - SHUTDOWN_DELAY=300
 ```

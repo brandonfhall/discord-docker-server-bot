@@ -15,7 +15,7 @@ class TestDockerControl(unittest.TestCase):
 
     def test_validate_container_name(self):
         """Test that container names are validated correctly."""
-        self.assertTrue(docker_control._validate_container_name("valheim_server"))
+        self.assertTrue(docker_control._validate_container_name("my_game_server"))
         self.assertTrue(docker_control._validate_container_name("my-server.1"))
 
         # SECURITY TEST: These strings simulate injection attacks.
@@ -46,23 +46,23 @@ class TestDockerControl(unittest.TestCase):
         mock_client.containers.get.return_value = mock_container
 
         # Patch ALLOWED_CONTAINERS in docker_control module
-        with patch('src.docker_control.ALLOWED_CONTAINERS', ['valheim_server']):
+        with patch('src.docker_control.ALLOWED_CONTAINERS', ['my_game_server']):
 
             # 1. Test Start
             mock_container.status = "exited"
-            res = docker_control.start_container("valheim_server")
+            res = docker_control.start_container("my_game_server")
             print(f"  Start (exited): {res}")
             self.assertEqual(res, "started")
             mock_container.start.assert_called_once()
 
             mock_container.status = "running"
-            res = docker_control.start_container("valheim_server")
+            res = docker_control.start_container("my_game_server")
             print(f"  Start (running): {res}")
             self.assertEqual(res, "already running")
 
             # 2. Test Stop
             mock_container.status = "running"
-            res = docker_control.stop_container("valheim_server")
+            res = docker_control.stop_container("my_game_server")
             print(f"  Stop (running): {res}")
             self.assertEqual(res, "stopped")
             mock_container.stop.assert_called_once()
@@ -74,7 +74,7 @@ class TestDockerControl(unittest.TestCase):
             mock_exec.output = b"Message sent"
             mock_container.exec_run.return_value = mock_exec
 
-            res = docker_control.announce_in_game("valheim_server", "Hello World")
+            res = docker_control.announce_in_game("my_game_server", "Hello World")
             print(f"  Announce: {res}")
             self.assertIn("ok", res)
             # Verify sanitization happened in the call

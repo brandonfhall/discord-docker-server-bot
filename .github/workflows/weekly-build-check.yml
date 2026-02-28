@@ -37,7 +37,7 @@ jobs:
     - name: Run Unit Tests
       env:
         BOT_TOKEN: "test_token_mock"
-        ALLOWED_CONTAINERS: "valheim_server"
+        ALLOWED_CONTAINERS: "test_container"
       run: |
         export PYTHONPATH=$PYTHONPATH:.
         pytest -v tests/
