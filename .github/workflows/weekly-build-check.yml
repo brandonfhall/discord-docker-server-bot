@@ -42,7 +42,7 @@ jobs:
         ALLOWED_CONTAINERS: "valheim_server"
       run: |
         export PYTHONPATH=$PYTHONPATH:.
-        pytest tests/
+        pytest -v tests/
 
     # Step 3: Verify the Docker container actually builds
     - name: Build Docker Image
