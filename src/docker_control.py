@@ -11,6 +11,8 @@ _executor = ThreadPoolExecutor(max_workers=DOCKER_MAX_WORKERS)
 
 # Validate container names: alphanumeric, underscore, dot, hyphen only
 _VALID_CONTAINER_NAME = re.compile(r'^[a-zA-Z0-9_.-]+$')
+# Validate messages: Allow alphanumeric, spaces, and basic punctuation only
+_VALID_MSG_CHARS = re.compile(r'[^a-zA-Z0-9 .,!?:_\-]')
 
 
 def _validate_container_name(name: str) -> bool:
@@ -101,14 +103,12 @@ def container_status(name: str) -> Optional[str]:
 def _sanitize(msg: str) -> str:
     if not msg:
         return ""
-    s = msg.replace("\n", " ").replace("\r", " ")
-    # trim excessive length
-    if len(s) > 200:
-        s = s[:200]
-    # remove shell metacharacters and quotes to prevent injection
-    for ch in [';', '&', '|', '$', '`', '>', '<', '\\', '(', ')', '"', "'"]:
-        s = s.replace(ch, '')
-    return s
+    # Strict security hardening:
+    # 1. Truncate to 100 chars to prevent buffer issues
+    s = msg[:100]
+    # 2. Whitelist only safe characters. Removes all shell metacharacters/quotes.
+    s = _VALID_MSG_CHARS.sub('', s)
+    return s.strip()
 
 
 def announce_in_game(name: str, message: str) -> str:

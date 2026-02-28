@@ -1,10 +1,10 @@
 # Valheim Docker Controller Discord Bot
 
-This project provides a Dockerized Discord bot to manage a container running in Docker. It allows you to start, stop, and restart the server from Discord, handles in-game shutdown announcements, and manages permissions via Discord roles.
+This project provides a Dockerized Discord bot to manage a container running in Docker. It allows you to start, stop, and restart the server from Discord, handles in-game shutdown announcements, and manages permissions via Discord roles. Designed to control a single specific container.
 
 ## Features
 
-- **Container Control**: Start, Stop, and Restart specific Docker containers.
+- **Container Control**: Start, Stop, and Restart the Docker container.
 - **Graceful Shutdowns**: Automatically announces shutdowns/restarts in-game and waits for a configurable delay before stopping the container.
 - **Permission System**: Restrict commands to specific Discord roles. Admins can manage these permissions dynamically.
 - **Guild Locking**: Restrict the bot to a specific Discord server for security.
@@ -20,21 +20,20 @@ This project provides a Dockerized Discord bot to manage a container running in 
 
 1. **Clone the repository** and navigate to the directory.
 
-2. **Create Permissions File**:
-   Create an empty JSON file to store permissions.
-   ```bash
-   echo "{}" > permissions.json
-   ```
+2. **Prepare Data Directory**:
+   The bot will automatically create a `data/` directory and a `permissions.json` file on the first run.
 
-3. **Configure `docker-compose.yml`**:
+3. **Configure Environment**:
    Ensure the environment variables are set correctly. You can modify the `environment` section in `docker-compose.yml` or use an `.env` file.
 
    | Variable | Description | Default |
    | :--- | :--- | :--- |
    | `BOT_TOKEN` | **Required**. Your Discord Bot Token. | - |
-   | `ALLOWED_CONTAINERS` | Comma-separated list of container names the bot can control. | - |
+   | `ALLOWED_CONTAINERS` | The name of the container this bot controls. | - |
    | `DEFAULT_ALLOWED_ROLES` | Comma-separated list of Discord role names allowed to use control commands initially. | `ServerAdmin` |
    | `DISCORD_GUILD_ID` | **Recommended**. The ID of your Discord server. If set, the bot ignores commands from other servers/DMs. | `0` (Disabled) |
+   | `ANNOUNCE_CHANNEL_ID` | The ID of the Discord channel to send shutdown/restart announcements to. | `0` (Current Channel) |
+   | `ANNOUNCE_ROLE_ID` | The ID of a Discord role to mention (@Role) during announcements. | `0` (None) |
    | `CONTAINER_MESSAGE_CMD` | Shell command to send a message to the container. | `echo "Message: {message}"` |
    | `SHUTDOWN_DELAY` | Time in seconds to wait between announcement and action. | `300` (5 mins) |
    | `STATUS_PORT` | Port for the local HTTP status API. | `8000` |
@@ -49,21 +48,24 @@ This project provides a Dockerized Discord bot to manage a container running in 
 
 Prefix: `!`
 
+### General
+- `!guide`: Shows a simple usage guide.
+
 ### Control Commands
 Requires specific permissions (default: `ServerAdmin` role).
 
-- `!start <container_name>`: Starts the specified container.
-- `!stop <container_name>`: Announces shutdown, waits for delay, then stops the container.
-- `!restart <container_name>`: Announces restart, waits for delay, then restarts the container.
+- `!start`: Starts the container.
+- `!stop`: Announces shutdown, waits for delay, then stops the container.
+- `!restart`: Announces restart, waits for delay, then restarts the container.
 
 ### Status
-- `!status [container_name]`: Shows the current status (running, exited, etc.) of the container. If no name is provided, checks the first allowed container.
+- `!status`: Shows the current status (running, exited, etc.) of the container.
 
 ### Permission Management
 Requires `Administrator` permission in Discord.
 
 - `!perm list`: Lists all roles allowed to perform specific actions.
-- `!perm add <action> <role_name>`: Grants a role permission for an action (actions: `start`, `stop`, `restart`, `announce`).
+- `!perm add <action> <role_name>`: Grants a role permission for an action (actions: `start`, `stop`, `restart`).
 - `!perm remove <action> <role_name>`: Revokes permission.
 
 ## HTTP API
@@ -71,4 +73,7 @@ Requires `Administrator` permission in Discord.
 The bot exposes a simple JSON API on port `8000` (mapped in docker-compose).
 
 **GET /status**
-Returns the status of all allowed containers.
+Returns a JSON object containing:
+- `containers`: Status of the allowed container.
+- `permissions`: Current role permissions.
+- `logs`: The most recent 50 log lines.

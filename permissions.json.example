@@ -1,0 +1,11 @@
+{
+  "start": [
+    "ServerAdmin"
+  ],
+  "stop": [
+    "ServerAdmin"
+  ],
+  "restart": [
+    "ServerAdmin"
+  ]
+}
