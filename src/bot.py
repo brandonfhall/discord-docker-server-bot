@@ -81,6 +81,25 @@ def has_permission(action: str):
     return commands.check(predicate)
 
 
+<<<<<<< HEAD
+async def resolve_container(ctx, name: str):
+    """Helper to resolve the target container name."""
+    if name:
+        if name in ALLOWED_CONTAINERS:
+            return name
+        await ctx.send(f"Container '{name}' is not in the allowed list.")
+        return None
+    
+    if len(ALLOWED_CONTAINERS) == 1:
+        return ALLOWED_CONTAINERS[0]
+    
+    if len(ALLOWED_CONTAINERS) > 1:
+        await ctx.send(f"Multiple containers configured. Please specify one: {', '.join(ALLOWED_CONTAINERS)}")
+        return None
+        
+    await ctx.send("No allowed containers configured.")
+    return None
+=======
 async def send_announcement(ctx, message: str):
     """Helper to send announcements to the configured channel/role."""
     content = message
@@ -99,6 +118,7 @@ async def send_announcement(ctx, message: str):
     # If we sent it elsewhere, confirm in the command channel
     if target_channel.id != ctx.channel.id:
         await ctx.send(f"Announcement sent to {target_channel.mention}.")
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
 
 
 @bot.event
@@ -121,6 +141,13 @@ async def on_command_error(ctx, error):
 @bot.command()
 @has_permission("start")
 async def start(ctx, container_name: str = None):
+<<<<<<< HEAD
+    target = await resolve_container(ctx, container_name)
+    if not target:
+        return
+    await ctx.send(f"Starting {target}...")
+    res = await docker_control.run_blocking(docker_control.start_container, target)
+=======
     """Starts the container."""
     target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
     if not target:
@@ -133,12 +160,18 @@ async def start(ctx, container_name: str = None):
     await ctx.send(f"Starting {target}...")
     res = await docker_control.run_blocking(docker_control.start_container, target)
     logging.info(f"START result for {ctx.author}: {res}")
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
     await ctx.send(res)
 
 
 @bot.command()
 @has_permission("stop")
 async def stop(ctx, container_name: str = None):
+<<<<<<< HEAD
+    target = await resolve_container(ctx, container_name)
+    if not target:
+        return
+=======
     """Stops the container (with countdown)."""
     target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
     if not target:
@@ -148,6 +181,7 @@ async def stop(ctx, container_name: str = None):
         await ctx.send(f"Container {target} is not allowed.")
         return
     logging.info(f"User {ctx.author} requested STOP for container '{target}'")
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
     await ctx.send(f"Server {target} will stop in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     # announce immediately
     msg = f"Server will shut down in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
@@ -160,7 +194,10 @@ async def stop(ctx, container_name: str = None):
     async def do_stop():
         await asyncio.sleep(SHUTDOWN_DELAY)
         result = await docker_control.run_blocking(docker_control.stop_container, target)
+<<<<<<< HEAD
+=======
         logging.info(f"STOP execution result for {target}: {result}")
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
         await ctx.send(f"Stop result: {result}")
 
     bot.loop.create_task(do_stop())
@@ -169,6 +206,14 @@ async def stop(ctx, container_name: str = None):
 @bot.command()
 @has_permission("restart")
 async def restart(ctx, container_name: str = None):
+<<<<<<< HEAD
+    target = await resolve_container(ctx, container_name)
+    if not target:
+        return
+    await ctx.send(f"Server {target} will restart in {SHUTDOWN_DELAY//60} minutes (countdown started).")
+    msg = f"Server will restart in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
+    await ctx.send(msg)
+=======
     """Restarts the container (with countdown)."""
     target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
     if not target:
@@ -181,12 +226,16 @@ async def restart(ctx, container_name: str = None):
     await ctx.send(f"Server {target} will restart in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     msg = f"Server will restart in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
     await send_announcement(ctx, msg)
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
     await docker_control.run_blocking(docker_control.announce_in_game, target, msg)
 
     async def do_restart():
         await asyncio.sleep(SHUTDOWN_DELAY)
         result = await docker_control.run_blocking(docker_control.restart_container, target)
+<<<<<<< HEAD
+=======
         logging.info(f"RESTART execution result for {target}: {result}")
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
         await ctx.send(f"Restart result: {result}")
 
     bot.loop.create_task(do_restart())
@@ -194,18 +243,47 @@ async def restart(ctx, container_name: str = None):
 
 @bot.command(name="status")
 async def status_cmd(ctx, container_name: str = None):
+<<<<<<< HEAD
+    target = await resolve_container(ctx, container_name)
+=======
     """Checks the container status."""
     if container_name and container_name not in ALLOWED_CONTAINERS:
         return
     target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
     if not target:
-        await ctx.send("No container configured")
         return
     logging.info(f"User {ctx.author} requested STATUS for container '{target}'")
     res = await docker_control.run_blocking(docker_control.container_status, target)
     await ctx.send(f"Status for {target}: {res}")
 
 
+<<<<<<< HEAD
+@bot.command()
+@has_permission("announce")
+async def announce(ctx, arg1: str, *, arg2: str = None):
+    """
+    Send an in-game announcement.
+    Usage: !announce <message> (if single container)
+           !announce <container_name> <message> (if multiple)
+    """
+    target = None
+    message = None
+
+    if arg1 in ALLOWED_CONTAINERS:
+        target = arg1
+        message = arg2
+    elif len(ALLOWED_CONTAINERS) == 1:
+        target = ALLOWED_CONTAINERS[0]
+        message = f"{arg1} {arg2}" if arg2 else arg1
+    
+    if not target or not message:
+        await ctx.send(f"Usage: !announce <container_name> <message>\nAvailable: {', '.join(ALLOWED_CONTAINERS)}")
+        return
+
+    res = await docker_control.run_blocking(docker_control.announce_in_game, target, message)
+    await ctx.send(f"Sent to {target}: {res}")
+=======
 @bot.command(name="guide")
 async def guide(ctx):
     """Shows a simple usage guide."""
@@ -226,6 +304,7 @@ async def guide(ctx):
     ]
     logging.info(f"User {ctx.author} requested GUIDE")
     await ctx.send("\n".join(lines))
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
 
 
 @bot.group()
