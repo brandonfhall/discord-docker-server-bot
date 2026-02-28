@@ -8,7 +8,7 @@ env:
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main" , "arm-build"]
     tags: [ 'v*.*.*' ]
   # Rebuild monthly to pick up base image security updates automatically
   schedule:
