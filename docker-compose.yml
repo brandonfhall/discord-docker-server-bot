@@ -1,13 +1,13 @@
-version: '3.8'
 services:
   valheim-server:
-    image: your-valheim-image:latest
+    image: alpine:latest
+    command: tail -f /dev/null
     container_name: valheim_server
     # configure volumes/ports as you normally would for your server
 
   valheim-bot:
     build: .
-    container_name: valheim_bot
+    container_name: discord_bot
     environment:
       - BOT_TOKEN
       - ALLOWED_CONTAINERS
@@ -18,10 +18,13 @@ services:
       - SHUTDOWN_DELAY
       - LOG_LEVEL
       - DISCORD_GUILD_ID
+      - PERMISSIONS_FILE
+      - LOG_FILE
+      - ANNOUNCE_CHANNEL_ID
+      - ANNOUNCE_ROLE_ID
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
-      # NOTE: Ensure permissions.json exists on host before starting, or Docker creates it as a directory
-      - ./permissions.json:/app/permissions.json
+      - /var/run/docker.sock:/var/run/docker.sock # Defaults to rw, required for start/stop
+      - ./data:/app/data
     restart: unless-stopped
     ports:
       - "8000:8000" # status endpoint

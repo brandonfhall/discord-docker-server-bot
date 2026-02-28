@@ -1,0 +1,12 @@
+2026-02-25 05:03:34,001 [WARNING] discord.client: PyNaCl is not installed, voice will NOT be supported
+2026-02-25 05:03:34,002 [INFO] discord.client: logging in using static token
+2026-02-25 05:03:34,913 [INFO] discord.gateway: Shard ID None has connected to Gateway (Session ID: a01090a239a0961dcc7e39e637d2428f).
+2026-02-25 05:03:36,917 [INFO] root: Logging to file: /app/data/bot.log
+2026-02-25 05:03:36,918 [INFO] root: Permissions file: /app/data/permissions.json
+2026-02-25 05:07:00,198 [WARNING] discord.client: PyNaCl is not installed, voice will NOT be supported
+2026-02-25 05:07:00,199 [INFO] discord.client: logging in using static token
+2026-02-25 05:07:00,956 [INFO] discord.gateway: Shard ID None has connected to Gateway (Session ID: 75006c3d8c722eda905aacb26066e7d6).
+2026-02-25 05:07:02,961 [INFO] root: Logging to file: /app/data/bot.log
+2026-02-25 05:07:02,961 [INFO] root: Permissions file: /app/data/permissions.json
+2026-02-25 05:07:03,418 [INFO] root: Initializing permissions file at: /app/data/permissions.json
+2026-02-25 05:07:21,566 [INFO] root: User sharpshout requested STATUS for container 'valheim_server'

@@ -2,6 +2,7 @@ import asyncio
 import logging
 import os
 from datetime import datetime
+from collections import deque
 
 import uvicorn
 from fastapi import FastAPI
@@ -9,11 +10,21 @@ import discord
 from discord.ext import commands
 
 from . import docker_control
-from .config import BOT_TOKEN, STATUS_PORT, SHUTDOWN_DELAY, ALLOWED_CONTAINERS, DISCORD_GUILD_ID
+from .config import BOT_TOKEN, STATUS_PORT, SHUTDOWN_DELAY, ALLOWED_CONTAINERS, DISCORD_GUILD_ID, LOG_FILE, ANNOUNCE_CHANNEL_ID, ANNOUNCE_ROLE_ID
 from . import permissions
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-logging.basicConfig(level=LOG_LEVEL)
+
+# Ensure log directory exists
+log_dir = os.path.dirname(LOG_FILE)
+if log_dir and not os.path.exists(log_dir):
+    os.makedirs(log_dir)
+
+logging.basicConfig(
+    level=LOG_LEVEL,
+    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    handlers=[logging.StreamHandler(), logging.FileHandler(LOG_FILE)]
+)
 
 app = FastAPI()
 
@@ -23,7 +34,26 @@ def status():
     out = {}
     for name in ALLOWED_CONTAINERS:
         out[name] = docker_control.container_status(name)
-    return {"ok": True, "containers": out}
+
+    # Get current permissions
+    current_perms = permissions.list_permissions()
+
+    # Get recent logs (last 50 lines)
+    recent_logs = []
+    if os.path.exists(LOG_FILE):
+        try:
+            with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
+                recent_logs = list(deque(f, maxlen=50))
+                recent_logs = [line.strip().replace(BOT_TOKEN, "[REDACTED]") for line in recent_logs]
+        except Exception as e:
+            recent_logs = [f"Error reading logs: {e}"]
+
+    return {
+        "ok": True,
+        "containers": out,
+        "permissions": current_perms,
+        "logs": recent_logs
+    }
 
 
 intents = discord.Intents.default()
@@ -51,6 +81,7 @@ def has_permission(action: str):
     return commands.check(predicate)
 
 
+<<<<<<< HEAD
 async def resolve_container(ctx, name: str):
     """Helper to resolve the target container name."""
     if name:
@@ -68,35 +99,94 @@ async def resolve_container(ctx, name: str):
         
     await ctx.send("No allowed containers configured.")
     return None
+=======
+async def send_announcement(ctx, message: str):
+    """Helper to send announcements to the configured channel/role."""
+    content = message
+    if ANNOUNCE_ROLE_ID:
+        content = f"<@&{ANNOUNCE_ROLE_ID}> {message}"
+
+    target_channel = ctx.channel
+    if ANNOUNCE_CHANNEL_ID:
+        found = bot.get_channel(ANNOUNCE_CHANNEL_ID)
+        if found:
+            target_channel = found
+        else:
+            logging.warning(f"Configured ANNOUNCE_CHANNEL_ID {ANNOUNCE_CHANNEL_ID} not found.")
+
+    await target_channel.send(content)
+    # If we sent it elsewhere, confirm in the command channel
+    if target_channel.id != ctx.channel.id:
+        await ctx.send(f"Announcement sent to {target_channel.mention}.")
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
 
 
 @bot.event
 async def on_ready():
     print(f"Bot ready: {bot.user} at {datetime.utcnow().isoformat()} UTC")
+    logging.info(f"Logging to file: {os.path.abspath(LOG_FILE)}")
+    logging.info(f"Permissions file: {os.path.abspath(permissions.PERMISSIONS_FILE)}")
 
+
+@bot.event
+async def on_command_error(ctx, error):
+    if isinstance(error, commands.CheckFailure):
+        logging.warning(f"Permission denied for user {ctx.author} on command {ctx.command}")
+        await ctx.send("You do not have permission to use this command.")
+    elif isinstance(error, commands.CommandNotFound):
+        pass
+    else:
+        logging.error(f"Command error: {error}", exc_info=True)
 
 @bot.command()
 @has_permission("start")
 async def start(ctx, container_name: str = None):
+<<<<<<< HEAD
     target = await resolve_container(ctx, container_name)
     if not target:
         return
     await ctx.send(f"Starting {target}...")
     res = await docker_control.run_blocking(docker_control.start_container, target)
+=======
+    """Starts the container."""
+    target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
+    if not target:
+        await ctx.send("No container specified.")
+        return
+    if target not in ALLOWED_CONTAINERS:
+        await ctx.send(f"Container {target} is not allowed.")
+        return
+    logging.info(f"User {ctx.author} requested START for container '{target}'")
+    await ctx.send(f"Starting {target}...")
+    res = await docker_control.run_blocking(docker_control.start_container, target)
+    logging.info(f"START result for {ctx.author}: {res}")
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
     await ctx.send(res)
 
 
 @bot.command()
 @has_permission("stop")
 async def stop(ctx, container_name: str = None):
+<<<<<<< HEAD
     target = await resolve_container(ctx, container_name)
     if not target:
         return
+=======
+    """Stops the container (with countdown)."""
+    target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
+    if not target:
+        await ctx.send("No container specified.")
+        return
+    if target not in ALLOWED_CONTAINERS:
+        await ctx.send(f"Container {target} is not allowed.")
+        return
+    logging.info(f"User {ctx.author} requested STOP for container '{target}'")
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
     await ctx.send(f"Server {target} will stop in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     # announce immediately
     msg = f"Server will shut down in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
     # announce in discord channel
-    await ctx.send(msg)
+    await send_announcement(ctx, msg)
     # announce in-game
     await docker_control.run_blocking(docker_control.announce_in_game, target, msg)
 
@@ -104,6 +194,10 @@ async def stop(ctx, container_name: str = None):
     async def do_stop():
         await asyncio.sleep(SHUTDOWN_DELAY)
         result = await docker_control.run_blocking(docker_control.stop_container, target)
+<<<<<<< HEAD
+=======
+        logging.info(f"STOP execution result for {target}: {result}")
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
         await ctx.send(f"Stop result: {result}")
 
     bot.loop.create_task(do_stop())
@@ -112,17 +206,36 @@ async def stop(ctx, container_name: str = None):
 @bot.command()
 @has_permission("restart")
 async def restart(ctx, container_name: str = None):
+<<<<<<< HEAD
     target = await resolve_container(ctx, container_name)
     if not target:
         return
     await ctx.send(f"Server {target} will restart in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     msg = f"Server will restart in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
     await ctx.send(msg)
+=======
+    """Restarts the container (with countdown)."""
+    target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
+    if not target:
+        await ctx.send("No container specified.")
+        return
+    if target not in ALLOWED_CONTAINERS:
+        await ctx.send(f"Container {target} is not allowed.")
+        return
+    logging.info(f"User {ctx.author} requested RESTART for container '{target}'")
+    await ctx.send(f"Server {target} will restart in {SHUTDOWN_DELAY//60} minutes (countdown started).")
+    msg = f"Server will restart in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
+    await send_announcement(ctx, msg)
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
     await docker_control.run_blocking(docker_control.announce_in_game, target, msg)
 
     async def do_restart():
         await asyncio.sleep(SHUTDOWN_DELAY)
         result = await docker_control.run_blocking(docker_control.restart_container, target)
+<<<<<<< HEAD
+=======
+        logging.info(f"RESTART execution result for {target}: {result}")
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
         await ctx.send(f"Restart result: {result}")
 
     bot.loop.create_task(do_restart())
@@ -130,13 +243,22 @@ async def restart(ctx, container_name: str = None):
 
 @bot.command(name="status")
 async def status_cmd(ctx, container_name: str = None):
+<<<<<<< HEAD
     target = await resolve_container(ctx, container_name)
+=======
+    """Checks the container status."""
+    if container_name and container_name not in ALLOWED_CONTAINERS:
+        return
+    target = container_name or (ALLOWED_CONTAINERS[0] if ALLOWED_CONTAINERS else None)
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
     if not target:
         return
+    logging.info(f"User {ctx.author} requested STATUS for container '{target}'")
     res = await docker_control.run_blocking(docker_control.container_status, target)
     await ctx.send(f"Status for {target}: {res}")
 
 
+<<<<<<< HEAD
 @bot.command()
 @has_permission("announce")
 async def announce(ctx, arg1: str, *, arg2: str = None):
@@ -161,29 +283,58 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
 
     res = await docker_control.run_blocking(docker_control.announce_in_game, target, message)
     await ctx.send(f"Sent to {target}: {res}")
+=======
+@bot.command(name="guide")
+async def guide(ctx):
+    """Shows a simple usage guide."""
+    lines = [
+        "**Valheim Bot Guide**",
+        "Use `!help` for detailed command usage.",
+        "",
+        "**Control**",
+        "`!start`   : Start the server",
+        "`!stop`    : Stop the server (with delay)",
+        "`!restart` : Restart the server (with delay)",
+        "`!status`  : Show server status",
+        "",
+        "**Permissions** (Admins)",
+        "`!perm list`   : List allowed roles",
+        "`!perm add`    : Add role to action",
+        "`!perm remove` : Remove role from action"
+    ]
+    logging.info(f"User {ctx.author} requested GUIDE")
+    await ctx.send("\n".join(lines))
+>>>>>>> ec6497d734fd2fe3388ef06bef1b22e57184ebf9
 
 
 @bot.group()
 @commands.has_permissions(administrator=True)
 async def perm(ctx):
+    """Manages permissions (Admins only)."""
     if ctx.invoked_subcommand is None:
         await ctx.send("subcommands: add, remove, list")
 
 
 @perm.command(name="add")
 async def perm_add(ctx, action: str, *, role_name: str):
+    """Adds a role to an action."""
     permissions.add_role(action, role_name)
+    logging.info(f"User {ctx.author} ADDED role '{role_name}' to action '{action}'")
     await ctx.send(f"Added role {role_name} to {action}")
 
 
 @perm.command(name="remove")
 async def perm_remove(ctx, action: str, *, role_name: str):
+    """Removes a role from an action."""
     permissions.remove_role(action, role_name)
+    logging.info(f"User {ctx.author} REMOVED role '{role_name}' from action '{action}'")
     await ctx.send(f"Removed role {role_name} from {action}")
 
 
 @perm.command(name="list")
 async def perm_list(ctx):
+    """Lists all permissions."""
+    logging.info(f"User {ctx.author} requested PERM LIST")
     data = permissions.list_permissions()
     lines = [f"{k}: {', '.join(v)}" for k, v in data.items()]
     await ctx.send("\n".join(lines))
