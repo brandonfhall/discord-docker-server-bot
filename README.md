@@ -1,5 +1,7 @@
 # Docker Controller Discord Bot
 
+**Docker Hub Image:** [brandonh317/discord-docker-bot](https://hub.docker.com/r/brandonh317/discord-docker-bot)
+
 This project provides a Dockerized Discord bot to manage a container running in Docker. It allows you to start, stop, and restart the server from Discord, handles in-game shutdown announcements, and manages permissions via Discord roles. Designed to control a single specific container.
 
 ## Features
