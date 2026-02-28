@@ -89,3 +89,16 @@ jobs:
           labels: ${{ steps.meta.outputs.labels }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+  prune-tags:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    steps:
+      - name: Prune old date-based tags from Docker Hub
+        uses: snok/container-retention-policy@v2
+        with:
+          image-names: ${{ env.IMAGE_NAME }}
+          keep-last: 3
+          tag-regex: '^[0-9]{8}$'
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_TOKEN }}
