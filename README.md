@@ -55,6 +55,7 @@ Requires specific permissions (default: `ServerAdmin` role).
 - `!start <container_name>`: Starts the specified container.
 - `!stop <container_name>`: Announces shutdown, waits for delay, then stops the container.
 - `!restart <container_name>`: Announces restart, waits for delay, then restarts the container.
+- `!announce [container_name] <message>`: Sends an in-game announcement. If only one container is configured, the name is optional.
 
 ### Status
 - `!status [container_name]`: Shows the current status (running, exited, etc.) of the container. If no name is provided, checks the first allowed container.

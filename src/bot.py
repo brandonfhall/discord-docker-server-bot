@@ -137,6 +137,32 @@ async def status_cmd(ctx, container_name: str = None):
     await ctx.send(f"Status for {target}: {res}")
 
 
+@bot.command()
+@has_permission("announce")
+async def announce(ctx, arg1: str, *, arg2: str = None):
+    """
+    Send an in-game announcement.
+    Usage: !announce <message> (if single container)
+           !announce <container_name> <message> (if multiple)
+    """
+    target = None
+    message = None
+
+    if arg1 in ALLOWED_CONTAINERS:
+        target = arg1
+        message = arg2
+    elif len(ALLOWED_CONTAINERS) == 1:
+        target = ALLOWED_CONTAINERS[0]
+        message = f"{arg1} {arg2}" if arg2 else arg1
+    
+    if not target or not message:
+        await ctx.send(f"Usage: !announce <container_name> <message>\nAvailable: {', '.join(ALLOWED_CONTAINERS)}")
+        return
+
+    res = await docker_control.run_blocking(docker_control.announce_in_game, target, message)
+    await ctx.send(f"Sent to {target}: {res}")
+
+
 @bot.group()
 @commands.has_permissions(administrator=True)
 async def perm(ctx):
