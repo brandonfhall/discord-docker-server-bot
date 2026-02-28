@@ -129,16 +129,29 @@ async def resolve_container(ctx, name: str):
 async def send_announcement(ctx, message: str):
     """Helper to send announcements to the configured channel/role."""
     content = message
-    if ANNOUNCE_ROLE_ID:
-        content = f"<@&{ANNOUNCE_ROLE_ID}> {message}"
+
+    # Parse Role ID (handle empty strings/spaces)
+    role_id = None
+    if ANNOUNCE_ROLE_ID and str(ANNOUNCE_ROLE_ID).strip():
+        try:
+            role_id = int(str(ANNOUNCE_ROLE_ID).strip())
+        except ValueError:
+            logging.warning(f"Invalid ANNOUNCE_ROLE_ID: {ANNOUNCE_ROLE_ID}")
+
+    if role_id:
+        content = f"<@&{role_id}> {message}"
 
     target_channel = ctx.channel
-    if ANNOUNCE_CHANNEL_ID:
-        found = bot.get_channel(ANNOUNCE_CHANNEL_ID)
-        if found:
-            target_channel = found
-        else:
-            logging.warning(f"Configured ANNOUNCE_CHANNEL_ID {ANNOUNCE_CHANNEL_ID} not found.")
+    if ANNOUNCE_CHANNEL_ID and str(ANNOUNCE_CHANNEL_ID).strip():
+        try:
+            cid = int(str(ANNOUNCE_CHANNEL_ID).strip())
+            found = bot.get_channel(cid)
+            if found:
+                target_channel = found
+            else:
+                logging.warning(f"Configured ANNOUNCE_CHANNEL_ID {cid} not found.")
+        except ValueError:
+            logging.warning(f"Invalid ANNOUNCE_CHANNEL_ID: {ANNOUNCE_CHANNEL_ID}")
 
     await target_channel.send(content)
     # If we sent it elsewhere, confirm in the command channel
