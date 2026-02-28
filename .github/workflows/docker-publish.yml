@@ -69,6 +69,7 @@ jobs:
           images: ${{ env.IMAGE_NAME }}
           tags: |
             type=raw,value=latest,enable=true
+            type=raw,value={{date 'YYYYMMDD'}}
             type=ref,event=tag
             type=sha
             type=schedule,pattern=monthly
