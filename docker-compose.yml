@@ -6,7 +6,7 @@ services:
     # configure volumes/ports as you normally would for your server
 
   valheim-bot:
-    build: .
+    image: brandonh317/discord-docker-bot:latest
     container_name: discord_bot
     environment:
       - BOT_TOKEN
