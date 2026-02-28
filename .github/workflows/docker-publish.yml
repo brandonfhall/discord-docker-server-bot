@@ -8,7 +8,7 @@ env:
 
 on:
   push:
-    branches: [ "main" ]
+    branches: [ "main" , "docker-purge-testing" ]
     tags: [ 'v*.*.*' ]
   # Rebuild monthly to pick up base image security updates automatically
   schedule:
@@ -98,12 +98,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Prune old date-based tags from Docker Hub
-        uses: snok/container-retention-policy@v2
+        uses: snok/container-retention-policy@v3.0.0
         with:
           image-names: ${{ env.IMAGE_NAME }}
-          account-type: 'personal'
-          keep-at-least: 5
-          filter-tags: '^[0-9]{8}$'
+          account: user
+          image-tags: '^[0-9]{8}$'
           token: ${{ secrets.DOCKER_TOKEN }}
           dry-run: true
           cut-off: 30d
