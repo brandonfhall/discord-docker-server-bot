@@ -1,4 +1,5 @@
 import unittest
+import asyncio
 import json
 import os
 import sys
@@ -70,3 +71,32 @@ class TestPermissions(unittest.TestCase):
         
         role.name = "Peasant"
         self.assertFalse(permissions.is_member_allowed("start", member))
+
+class TestBotLogic(unittest.IsolatedAsyncioTestCase):
+    async def test_resolve_container(self):
+        """Test the container resolution logic."""
+        # Import bot here to avoid top-level execution issues if any
+        from src import bot
+        
+        # Mock the context
+        ctx = MagicMock()
+        # ctx.send must be awaitable
+        f = asyncio.Future()
+        f.set_result(None)
+        ctx.send.return_value = f
+
+        # Case 1: Specific name provided and allowed
+        bot.ALLOWED_CONTAINERS = ["server1", "server2"]
+        res = await bot.resolve_container(ctx, "server1")
+        self.assertEqual(res, "server1")
+
+        # Case 2: No name provided, multiple allowed -> Error/None
+        res = await bot.resolve_container(ctx, None)
+        self.assertIsNone(res)
+        # Verify it asked for specification
+        ctx.send.assert_called()
+
+        # Case 3: No name provided, single allowed -> Auto-resolve
+        bot.ALLOWED_CONTAINERS = ["server1"]
+        res = await bot.resolve_container(ctx, None)
+        self.assertEqual(res, "server1")

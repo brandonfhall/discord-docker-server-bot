@@ -5,12 +5,12 @@ from datetime import datetime
 from collections import deque
 
 import uvicorn
-from fastapi import FastAPI
+from fastapi import FastAPI, Header, HTTPException, Depends, Query
 import discord
 from discord.ext import commands
 
 from . import docker_control
-from .config import BOT_TOKEN, STATUS_PORT, SHUTDOWN_DELAY, ALLOWED_CONTAINERS, DISCORD_GUILD_ID, LOG_FILE, ANNOUNCE_CHANNEL_ID, ANNOUNCE_ROLE_ID
+from .config import BOT_TOKEN, STATUS_TOKEN, STATUS_PORT, SHUTDOWN_DELAY, ALLOWED_CONTAINERS, DISCORD_GUILD_ID, LOG_FILE, ANNOUNCE_CHANNEL_ID, ANNOUNCE_ROLE_ID
 from . import permissions
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -28,8 +28,19 @@ logging.basicConfig(
 
 app = FastAPI()
 
+async def verify_token(
+    x_auth_token: str = Header(None, alias="X-Auth-Token"),
+    query_token: str = Query(None, alias="token")
+):
+    # If STATUS_TOKEN is empty (user explicitly disabled it), allow access
+    if not STATUS_TOKEN:
+        return
 
-@app.get("/status")
+    token = x_auth_token or query_token
+    if not token or token != STATUS_TOKEN:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+@app.get("/status", dependencies=[Depends(verify_token)])
 def status():
     out = {}
     for name in ALLOWED_CONTAINERS:
@@ -44,7 +55,10 @@ def status():
         try:
             with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
                 recent_logs = list(deque(f, maxlen=50))
+                # Redact tokens
                 recent_logs = [line.strip().replace(BOT_TOKEN, "[REDACTED]") for line in recent_logs]
+                if STATUS_TOKEN and STATUS_TOKEN != BOT_TOKEN:
+                    recent_logs = [line.replace(STATUS_TOKEN, "[REDACTED]") for line in recent_logs]
         except Exception as e:
             recent_logs = [f"Error reading logs: {e}"]
 

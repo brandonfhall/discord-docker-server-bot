@@ -31,6 +31,7 @@ This project provides a Dockerized Discord bot to manage a container running in 
    | `BOT_TOKEN` | **Required**. Your Discord Bot Token. | - |
    | `ALLOWED_CONTAINERS` | The name of the container this bot controls. | - |
    | `DEFAULT_ALLOWED_ROLES` | Comma-separated list of Discord role names allowed to use control commands initially. | `ServerAdmin` |
+   | `STATUS_TOKEN` | Token required for the `/status` API. If not set, the API is open (no auth). | `None` |
    | `DISCORD_GUILD_ID` | **Recommended**. The ID of your Discord server. If set, the bot ignores commands from other servers/DMs. | `0` (Disabled) |
    | `ANNOUNCE_CHANNEL_ID` | The ID of the Discord channel to send shutdown/restart announcements to. | `0` (Current Channel) |
    | `ANNOUNCE_ROLE_ID` | The ID of a Discord role to mention (@Role) during announcements. | `0` (None) |
@@ -74,6 +75,12 @@ Requires `Administrator` permission in Discord.
 The bot exposes a simple JSON API on port `8000` (mapped in docker-compose).
 
 **GET /status**
+Requires authentication via `STATUS_TOKEN` (if configured).
+
+Methods:
+1. **Header**: `X-Auth-Token: <YOUR_TOKEN>`
+2. **URL Parameter**: `http://localhost:8000/status?token=<YOUR_TOKEN>`
+
 Returns a JSON object containing:
 - `containers`: Status of the allowed container.
 - `permissions`: Current role permissions.
