@@ -2,14 +2,11 @@ import unittest
 import asyncio
 import json
 import os
-import sys
 from unittest.mock import MagicMock, patch
-
-# Add project root to path so we can import src
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..')))
 
 from src import docker_control
 from src import permissions
+
 
 class TestDockerControl(unittest.TestCase):
     def setUp(self):
@@ -20,7 +17,7 @@ class TestDockerControl(unittest.TestCase):
         """Test that container names are validated correctly."""
         self.assertTrue(docker_control._validate_container_name("valheim_server"))
         self.assertTrue(docker_control._validate_container_name("my-server.1"))
-        
+
         # SECURITY TEST: These strings simulate injection attacks.
         # They are NOT executed. We are asserting that the validator correctly REJECTS them.
         self.assertFalse(docker_control._validate_container_name("server; rm -rf"))
@@ -41,16 +38,16 @@ class TestDockerControl(unittest.TestCase):
     def test_docker_actions(self, mock_from_env):
         """Test start, stop, and announce logic with mocked docker client."""
         print("\nTesting Docker actions (Start/Stop/Announce)...")
-        
+
         # Setup Mock
         mock_client = MagicMock()
         mock_container = MagicMock()
         mock_from_env.return_value = mock_client
         mock_client.containers.get.return_value = mock_container
-        
+
         # Patch ALLOWED_CONTAINERS in docker_control module
         with patch('src.docker_control.ALLOWED_CONTAINERS', ['valheim_server']):
-            
+
             # 1. Test Start
             mock_container.status = "exited"
             res = docker_control.start_container("valheim_server")
@@ -76,7 +73,7 @@ class TestDockerControl(unittest.TestCase):
             mock_exec.exit_code = 0
             mock_exec.output = b"Message sent"
             mock_container.exec_run.return_value = mock_exec
-            
+
             res = docker_control.announce_in_game("valheim_server", "Hello World")
             print(f"  Announce: {res}")
             self.assertIn("ok", res)
@@ -92,6 +89,7 @@ class TestDockerControl(unittest.TestCase):
         res = docker_control.start_container("evil_container")
         print(f"  Security Check Result: {res}")
         self.assertIn("not allowed", res)
+
 
 class TestPermissions(unittest.TestCase):
     def setUp(self):
@@ -109,7 +107,7 @@ class TestPermissions(unittest.TestCase):
         """Test that the permissions file is created with defaults if missing."""
         if os.path.exists(self.test_file):
             os.remove(self.test_file)
-        
+
         # This should trigger file creation
         data = permissions._load()
         self.assertTrue(os.path.exists(self.test_file))
@@ -120,15 +118,15 @@ class TestPermissions(unittest.TestCase):
         # Create a dummy permissions file
         with open(self.test_file, 'w') as f:
             json.dump({"start": ["SuperUser"]}, f)
-        
+
         # Mock a Discord member with specific roles
         member = MagicMock()
         role = MagicMock()
         role.name = "SuperUser"
         member.roles = [role]
-        
+
         self.assertTrue(permissions.is_member_allowed("start", member))
-        
+
         role.name = "Peasant"
         self.assertFalse(permissions.is_member_allowed("start", member))
 
@@ -145,12 +143,13 @@ class TestPermissions(unittest.TestCase):
         self.assertNotIn("Moderator", data["stop"])
         print("  Removed 'Moderator' from 'stop'.")
 
+
 class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     async def test_resolve_container(self):
         """Test the container resolution logic."""
         # Import bot here to avoid top-level execution issues if any
         from src import bot
-        
+
         # Mock the context
         ctx = MagicMock()
         # ctx.send must be awaitable
@@ -191,8 +190,8 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
             # Case 2: Token configured, correct token provided
             bot.STATUS_TOKEN = "secret123"
-            await bot.verify_token("secret123", None) # Header
-            await bot.verify_token(None, "secret123") # Query param
+            await bot.verify_token("secret123", None)  # Header
+            await bot.verify_token(None, "secret123")  # Query param
             print("  Case 2 (Correct Token): Passed (Allowed)")
 
             # Case 3: Token configured, wrong token provided

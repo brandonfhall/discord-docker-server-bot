@@ -25,6 +25,7 @@ def _validate_container_name(name: str) -> bool:
 # Global client instance to avoid re-initializing connection on every request
 _docker_client = None
 
+
 def _get_client():
     global _docker_client
     if _docker_client is None:

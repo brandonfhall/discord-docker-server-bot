@@ -10,7 +10,10 @@ import discord
 from discord.ext import commands
 
 from . import docker_control
-from .config import BOT_TOKEN, STATUS_TOKEN, STATUS_PORT, SHUTDOWN_DELAY, ALLOWED_CONTAINERS, DISCORD_GUILD_ID, LOG_FILE, ANNOUNCE_CHANNEL_ID, ANNOUNCE_ROLE_ID
+from .config import (
+    BOT_TOKEN, STATUS_TOKEN, STATUS_PORT, SHUTDOWN_DELAY, ALLOWED_CONTAINERS,
+    DISCORD_GUILD_ID, LOG_FILE, ANNOUNCE_CHANNEL_ID, ANNOUNCE_ROLE_ID
+)
 from . import permissions
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -28,6 +31,7 @@ logging.basicConfig(
 
 app = FastAPI()
 
+
 async def verify_token(
     x_auth_token: str = Header(None, alias="X-Auth-Token"),
     query_token: str = Query(None, alias="token")
@@ -39,6 +43,7 @@ async def verify_token(
     token = x_auth_token or query_token
     if not token or token != STATUS_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
 
 @app.get("/status", dependencies=[Depends(verify_token)])
 def status():
@@ -77,6 +82,7 @@ intents.members = True
 
 bot = commands.Bot(command_prefix="!", intents=intents)
 
+
 @bot.check
 async def check_guild(ctx):
     # If DISCORD_GUILD_ID is set, reject commands from other guilds or DMs
@@ -102,16 +108,18 @@ async def resolve_container(ctx, name: str):
             return name
         await ctx.send(f"Container '{name}' is not in the allowed list.")
         return None
-    
+
     if len(ALLOWED_CONTAINERS) == 1:
         return ALLOWED_CONTAINERS[0]
-    
+
     if len(ALLOWED_CONTAINERS) > 1:
         await ctx.send(f"Multiple containers configured. Please specify one: {', '.join(ALLOWED_CONTAINERS)}")
         return None
-        
+
     await ctx.send("No allowed containers configured.")
     return None
+
+
 async def send_announcement(ctx, message: str):
     """Helper to send announcements to the configured channel/role."""
     content = message
@@ -148,6 +156,7 @@ async def on_command_error(ctx, error):
         pass
     else:
         logging.error(f"Command error: {error}", exc_info=True)
+
 
 @bot.command()
 @has_permission("start")
@@ -239,13 +248,15 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
     elif len(ALLOWED_CONTAINERS) == 1:
         target = ALLOWED_CONTAINERS[0]
         message = f"{arg1} {arg2}" if arg2 else arg1
-    
+
     if not target or not message:
         await ctx.send(f"Usage: !announce <container_name> <message>\nAvailable: {', '.join(ALLOWED_CONTAINERS)}")
         return
 
     res = await docker_control.run_blocking(docker_control.announce_in_game, target, message)
     await ctx.send(f"Sent to {target}: {res}")
+
+
 @bot.command(name="guide")
 async def guide(ctx):
     """Shows a simple usage guide."""
