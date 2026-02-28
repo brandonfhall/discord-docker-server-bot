@@ -95,16 +95,60 @@ jobs:
 
   prune-tags:
     needs: build-and-push
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - name: Prune old date-based tags from Docker Hub
-        uses: snok/container-retention-policy@v2
-        with:
-          image-names: ${{ env.IMAGE_NAME }}
-          account-type: 'personal'
-          keep-at-least: 5
-          filter-tags: '^[0-9]{8}$'
-          token: ${{ secrets.DOCKER_TOKEN }}
-          dry-run: true
-          cut-off: 30d
+      - name: Prune old tags
+        env:
+          DOCKER_USER: ${{ secrets.DOCKER_USERNAME }}
+          DOCKER_PASS: ${{ secrets.DOCKER_TOKEN }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+          KEEP_N: 5
+          IGNORE_TAGS: "latest,develop"
+          DRY_RUN: false
+        run: |
+          # 1. Authenticate with Docker Hub to get JWT
+          echo "Logging in to Docker Hub..."
+          TOKEN=$(curl -s -H "Content-Type: application/json" -X POST -d '{"username": "'${DOCKER_USER}'", "password": "'${DOCKER_PASS}'"}' https://hub.docker.com/v2/users/login/ | jq -r .token)
+
+          if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then
+            echo "::error::Failed to authenticate with Docker Hub."
+            exit 1
+          fi
+
+          # 2. Fetch tags (limit 100, usually sufficient for retention policies)
+          # Sorted by last_updated descending so we process newest first
+          echo "Fetching tags for $IMAGE_NAME (sorted by date)..."
+          TAGS=$(curl -s -H "Authorization: JWT ${TOKEN}" "https://hub.docker.com/v2/repositories/${IMAGE_NAME}/tags/?page_size=100&ordering=-last_updated" | jq -r '.results[].name')
+
+          # 3. Filter out ignored tags
+          # Convert comma-separated IGNORE_TAGS to regex alternation (e.g., "latest|develop")
+          IGNORE_REGEX="^($(echo "$IGNORE_TAGS" | tr ',' '|'))$"
+          CANDIDATE_TAGS=$(echo "$TAGS" | grep -vE "$IGNORE_REGEX" || true)
+          
+          # Skip the first N tags (keep-last)
+          TAGS_TO_DELETE=$(echo "$CANDIDATE_TAGS" | tail -n +$(($KEEP_N + 1)))
+
+          if [ -z "$TAGS_TO_DELETE" ]; then
+            echo "No tags found to delete (keeping latest $KEEP_N)."
+            exit 0
+          fi
+
+          echo "Found tags to delete:"
+          echo "$TAGS_TO_DELETE"
+
+          # 4. Delete tags
+          for TAG in $TAGS_TO_DELETE; do
+            if [ "$DRY_RUN" = "true" ]; then
+              echo "[DRY RUN] Would delete: $TAG"
+            else
+              echo "Deleting $TAG..."
+              HTTP_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X DELETE -H "Authorization: JWT ${TOKEN}" "https://hub.docker.com/v2/repositories/${IMAGE_NAME}/tags/${TAG}/")
+              if [ "$HTTP_CODE" -eq 204 ]; then
+                echo "✅ Deleted $TAG"
+              else
+                echo "❌ Failed to delete $TAG (HTTP $HTTP_CODE)"
+              fi
+            fi
+          done
         
