@@ -1,5 +1,8 @@
 name: Docker Build & Publish
 
+permissions:
+  contents: read
+
 env:
   IMAGE_NAME: ${{ secrets.DOCKER_USERNAME }}/discord-docker-bot
 
