@@ -276,6 +276,14 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
     await ctx.send(f"Sent to {target}: {res}")
 
 
+@announce.error
+async def announce_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        await ctx.send("Usage: `!announce <message>` or `!announce <container_name> <message>`")
+    else:
+        await on_command_error(ctx, error)
+
+
 @bot.command(name="guide")
 async def guide(ctx):
     """Shows a simple usage guide."""
