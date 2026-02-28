@@ -104,7 +104,7 @@ jobs:
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
           KEEP_N: 5
           IGNORE_TAGS: "latest,develop"
-          DRY_RUN: true
+          DRY_RUN: false
         run: |
           # 1. Authenticate with Docker Hub to get JWT
           echo "Logging in to Docker Hub..."
