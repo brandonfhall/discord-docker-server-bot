@@ -77,7 +77,6 @@ jobs:
             type=raw,value=latest,enable=true
             type=raw,value={{date 'YYYYMMDD'}}
             type=ref,event=tag
-            type=sha
             type=schedule,pattern=monthly
 
       - name: Login to Docker Hub
