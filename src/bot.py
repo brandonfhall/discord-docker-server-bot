@@ -331,6 +331,18 @@ async def perm_list(ctx):
     await ctx.send("\n".join(lines))
 
 
+@perm.error
+async def perm_error(ctx, error):
+    if isinstance(error, commands.MissingRequiredArgument):
+        if ctx.invoked_subcommand:
+            if ctx.invoked_subcommand.name == 'add':
+                await ctx.send("Usage: `!perm add <action> <role_name>`")
+            elif ctx.invoked_subcommand.name == 'remove':
+                await ctx.send("Usage: `!perm remove <action> <role_name>`")
+    else:
+        await on_command_error(ctx, error)
+
+
 def start_api():
     config = uvicorn.Config(app, host="0.0.0.0", port=STATUS_PORT, log_level="warning")
     server = uvicorn.Server(config)
