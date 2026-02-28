@@ -101,7 +101,7 @@ jobs:
         uses: snok/container-retention-policy@v2
         with:
           image-names: ${{ env.IMAGE_NAME }}
-          keep-last: 3
-          tag-regex: '^[0-9]{8}$'
-          username: ${{ secrets.DOCKER_USERNAME }}
-          password: ${{ secrets.DOCKER_TOKEN }}
+          keep-at-least: 3
+          filter-tags: '^[0-9]{8}$'
+          token: ${{ secrets.DOCKER_TOKEN }}
+          dry-run: true
