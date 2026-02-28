@@ -24,7 +24,10 @@ This project provides a Dockerized Discord bot to manage a container running in 
    The bot will automatically create a `data/` directory and a `permissions.json` file on the first run.
 
 3. **Configure Environment**:
-   Ensure the environment variables are set correctly. You can modify the `environment` section in `docker-compose.yml` or use an `.env` file.
+   Copy the example environment file:
+   `cp .env.example .env`
+   
+   Edit `.env` and ensure the environment variables are set correctly.
 
    | Variable | Description | Default |
    | :--- | :--- | :--- |

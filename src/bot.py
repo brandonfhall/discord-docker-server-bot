@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+from logging.handlers import RotatingFileHandler
 from datetime import datetime
 from collections import deque
 
@@ -26,7 +27,12 @@ if log_dir and not os.path.exists(log_dir):
 logging.basicConfig(
     level=LOG_LEVEL,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[logging.StreamHandler(), logging.FileHandler(LOG_FILE)]
+    handlers=[
+        logging.StreamHandler(),
+        # Rotate logs: Max 5MB, keep 1 backup.
+        # This prevents the log file from growing indefinitely and crashing the status reader.
+        RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=1)
+    ]
 )
 
 app = FastAPI()
