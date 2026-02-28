@@ -10,7 +10,7 @@ import discord
 from discord.ext import commands
 
 from . import docker_control
-from .config import BOT_TOKEN, STATUS_PORT, SHUTDOWN_DELAY, ALLOWED_CONTAINERS, DISCORD_GUILD_ID, LOG_FILE
+from .config import BOT_TOKEN, STATUS_PORT, SHUTDOWN_DELAY, ALLOWED_CONTAINERS, DISCORD_GUILD_ID, LOG_FILE, ANNOUNCE_CHANNEL_ID, ANNOUNCE_ROLE_ID
 from . import permissions
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
@@ -44,7 +44,7 @@ def status():
         try:
             with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
                 recent_logs = list(deque(f, maxlen=50))
-                recent_logs = [line.strip() for line in recent_logs]
+                recent_logs = [line.strip().replace(BOT_TOKEN, "[REDACTED]") for line in recent_logs]
         except Exception as e:
             recent_logs = [f"Error reading logs: {e}"]
 
@@ -79,6 +79,26 @@ def has_permission(action: str):
         return allowed
 
     return commands.check(predicate)
+
+
+async def send_announcement(ctx, message: str):
+    """Helper to send announcements to the configured channel/role."""
+    content = message
+    if ANNOUNCE_ROLE_ID:
+        content = f"<@&{ANNOUNCE_ROLE_ID}> {message}"
+
+    target_channel = ctx.channel
+    if ANNOUNCE_CHANNEL_ID:
+        found = bot.get_channel(ANNOUNCE_CHANNEL_ID)
+        if found:
+            target_channel = found
+        else:
+            logging.warning(f"Configured ANNOUNCE_CHANNEL_ID {ANNOUNCE_CHANNEL_ID} not found.")
+
+    await target_channel.send(content)
+    # If we sent it elsewhere, confirm in the command channel
+    if target_channel.id != ctx.channel.id:
+        await ctx.send(f"Announcement sent to {target_channel.mention}.")
 
 
 @bot.event
@@ -132,7 +152,7 @@ async def stop(ctx, container_name: str = None):
     # announce immediately
     msg = f"Server will shut down in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
     # announce in discord channel
-    await ctx.send(msg)
+    await send_announcement(ctx, msg)
     # announce in-game
     await docker_control.run_blocking(docker_control.announce_in_game, target, msg)
 
@@ -160,7 +180,7 @@ async def restart(ctx, container_name: str = None):
     logging.info(f"User {ctx.author} requested RESTART for container '{target}'")
     await ctx.send(f"Server {target} will restart in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     msg = f"Server will restart in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
-    await ctx.send(msg)
+    await send_announcement(ctx, msg)
     await docker_control.run_blocking(docker_control.announce_in_game, target, msg)
 
     async def do_restart():

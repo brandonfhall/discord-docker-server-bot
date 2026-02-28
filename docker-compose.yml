@@ -20,8 +20,10 @@ services:
       - DISCORD_GUILD_ID
       - PERMISSIONS_FILE
       - LOG_FILE
+      - ANNOUNCE_CHANNEL_ID
+      - ANNOUNCE_ROLE_ID
     volumes:
-      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/run/docker.sock:/var/run/docker.sock # Defaults to rw, required for start/stop
       - ./data:/app/data
     restart: unless-stopped
     ports:
