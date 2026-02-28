@@ -102,7 +102,9 @@ jobs:
         with:
           image-names: ${{ env.IMAGE_NAME }}
           account-type: 'personal'
-          keep-at-least: 3
+          keep-at-least: 5
           filter-tags: '^[0-9]{8}$'
           token: ${{ secrets.DOCKER_TOKEN }}
           dry-run: true
+          cut-off: 30d
+        
