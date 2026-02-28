@@ -97,12 +97,13 @@ jobs:
     needs: build-and-push
     runs-on: ubuntu-latest
     steps:
-      - name: Prune old date-based tags
+      - name: Prune old tags
         env:
           DOCKER_USER: ${{ secrets.DOCKER_USERNAME }}
           DOCKER_PASS: ${{ secrets.DOCKER_TOKEN }}
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
           KEEP_N: 5
+          IGNORE_TAGS: "latest,develop"
           DRY_RUN: true
         run: |
           # 1. Authenticate with Docker Hub to get JWT
@@ -115,15 +116,17 @@ jobs:
           fi
 
           # 2. Fetch tags (limit 100, usually sufficient for retention policies)
-          echo "Fetching tags for $IMAGE_NAME..."
-          TAGS=$(curl -s -H "Authorization: JWT ${TOKEN}" "https://hub.docker.com/v2/repositories/${IMAGE_NAME}/tags/?page_size=100" | jq -r '.results[].name')
+          # Sorted by last_updated descending so we process newest first
+          echo "Fetching tags for $IMAGE_NAME (sorted by date)..."
+          TAGS=$(curl -s -H "Authorization: JWT ${TOKEN}" "https://hub.docker.com/v2/repositories/${IMAGE_NAME}/tags/?page_size=100&ordering=-last_updated" | jq -r '.results[].name')
 
-          # 3. Filter (8 digits), Sort (descending), and Identify tags to delete
-          # grep returns 1 if no match, so we use || true to prevent script failure
-          DATE_TAGS=$(echo "$TAGS" | grep -E '^[0-9]{8}$' | sort -r || true)
+          # 3. Filter out ignored tags
+          # Convert comma-separated IGNORE_TAGS to regex alternation (e.g., "latest|develop")
+          IGNORE_REGEX="^($(echo "$IGNORE_TAGS" | tr ',' '|'))$"
+          CANDIDATE_TAGS=$(echo "$TAGS" | grep -vE "$IGNORE_REGEX" || true)
           
           # Skip the first N tags (keep-last)
-          TAGS_TO_DELETE=$(echo "$DATE_TAGS" | tail -n +$(($KEEP_N + 1)))
+          TAGS_TO_DELETE=$(echo "$CANDIDATE_TAGS" | tail -n +$(($KEEP_N + 1)))
 
           if [ -z "$TAGS_TO_DELETE" ]; then
             echo "No tags found to delete (keeping latest $KEEP_N)."
