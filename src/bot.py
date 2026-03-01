@@ -189,6 +189,22 @@ async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure):
         logging.warning(f"Permission denied for user {ctx.author} on command {ctx.command}")
         await ctx.send("You do not have permission to use this command.")
+    elif isinstance(error, commands.MissingRequiredArgument):
+        # Handle missing-argument cases explicitly so users see helpful usage.
+        cmd = ctx.command.qualified_name if ctx.command else ""
+        if cmd.startswith("perm "):
+            # Subcommands under the perm group such as "perm add" / "perm remove".
+            if "add" in cmd:
+                await ctx.send("Usage: `!perm add <action> <role_name>`")
+            elif "remove" in cmd:
+                await ctx.send("Usage: `!perm remove <action> <role_name>`")
+            else:
+                await ctx.send("Usage: `!perm <add|remove|list> ...`")
+        elif cmd == "perm":
+            await ctx.send("Usage: `!perm <add|remove|list> ...`")
+        else:
+            # Generic fallback for other commands with missing args.
+            await ctx.send("Missing required argument(s) for this command. Use `!help` for details.")
     elif isinstance(error, commands.CommandNotFound):
         # For unknown commands, normally stay quiet to avoid noise.
         # However, special-case the permission management command so admins
