@@ -1,0 +1,30 @@
+services:
+  # Mock game server for local testing
+  my-game-server:
+    image: alpine:latest
+    command: tail -f /dev/null
+    container_name: my_game_server
+
+  discord-bot:
+    build: .
+    container_name: discord_bot
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./data:/app/data
+      # Mount src directory for live code updates (requires restart)
+      - ./src:/app/src
+    environment:
+      - BOT_TOKEN
+      - ALLOWED_CONTAINERS=my_game_server
+      - DEFAULT_ALLOWED_ROLES=ServerAdmin
+      - STATUS_PORT=8000
+      - DOCKER_MAX_WORKERS=2
+      - SHUTDOWN_DELAY=10
+      - LOG_LEVEL=DEBUG
+      - DISCORD_GUILD_ID
+      - ANNOUNCE_CHANNEL_ID
+      - ANNOUNCE_ROLE_ID
+      - ALLOWED_CHANNEL_IDS
+      - STATUS_TOKEN
+    ports:
+      - "8000:8000"

@@ -173,6 +173,18 @@ async def on_ready():
 
 
 @bot.event
+async def on_command(ctx):
+    logging.info(f"Command received: '{ctx.message.content}' from {ctx.author} ({ctx.author.id})")
+
+
+@bot.event
+async def on_message(message):
+    if message.author == bot.user:
+        logging.info(f"Bot sent: '{message.content}' to {message.channel}")
+    await bot.process_commands(message)
+
+
+@bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure):
         logging.warning(f"Permission denied for user {ctx.author} on command {ctx.command}")
@@ -347,12 +359,23 @@ async def perm_list(ctx):
 
 @perm.error
 async def perm_error(ctx, error):
+    logging.warning(f"Perm command error: {error} (Command: {ctx.command}, Subcommand: {ctx.invoked_subcommand}, Passed: {ctx.subcommand_passed})")
     if isinstance(error, commands.MissingRequiredArgument):
+        # Check which subcommand was attempted.
+        # If argument parsing fails, invoked_subcommand is often None, but subcommand_passed is set.
+        attempted_sub = ctx.subcommand_passed
         if ctx.invoked_subcommand:
-            if ctx.invoked_subcommand.name == 'add':
-                await ctx.send("Usage: `!perm add <action> <role_name>`")
-            elif ctx.invoked_subcommand.name == 'remove':
-                await ctx.send("Usage: `!perm remove <action> <role_name>`")
+            attempted_sub = ctx.invoked_subcommand.name
+
+        if attempted_sub:
+            attempted_sub = attempted_sub.lower()
+
+        if attempted_sub == "add":
+            await ctx.send("Usage: `!perm add <action> <role_name>`")
+        elif attempted_sub == "remove":
+            await ctx.send("Usage: `!perm remove <action> <role_name>`")
+        else:
+            await ctx.send("Usage: `!perm <add|remove|list> ...`")
     else:
         await on_command_error(ctx, error)
 
