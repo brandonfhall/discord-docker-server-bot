@@ -41,14 +41,17 @@ services:
 
 | Variable | Description | Default |
 | :--- | :--- | :--- |
-| `BOT_TOKEN` | **Required**. Your Discord Bot Token. | - |
-| `ALLOWED_CONTAINERS` | **Required**. The name of the container to control (exact match). | - |
+| `BOT_TOKEN` | **Required**. Your Discord Bot Token. The bot will not start without this. | - |
+| `ALLOWED_CONTAINERS` | **Required**. Comma-separated container name(s) to control (exact match). The bot will not start without this. | - |
 | `DEFAULT_ALLOWED_ROLES` | Comma-separated list of roles allowed to use commands initially. | `ServerAdmin` |
 | `SHUTDOWN_DELAY` | Time in seconds to wait between announcement and stop/restart. | `300` |
 | `CONTAINER_MESSAGE_CMD` | Shell command to send a message to the container. Use `{message}` as placeholder. | `echo "Message: {message}"` |
+| `STATUS_TOKEN` | Token required to access the `/status` HTTP API. If unset, the API is open with no authentication. | `None` (Open) |
 | `DISCORD_GUILD_ID` | Optional. Lock the bot to a specific Discord server ID. | `0` (Disabled) |
-| `ANNOUNCE_CHANNEL_ID` | Optional. Channel ID for shutdown announcements. | `0` (Current Channel) |
+| `ANNOUNCE_CHANNEL_ID` | Optional. Channel ID for shutdown/restart announcements. | `0` (Current Channel) |
+| `ANNOUNCE_ROLE_ID` | Optional. Role ID to @mention during announcements. | `0` (None) |
 | `ALLOWED_CHANNEL_IDS` | Optional. Comma-separated list of Channel IDs where commands are allowed. | `None` (All Channels) |
+| `STATUS_PORT` | Port for the local HTTP status API. | `8000` |
 | `LOG_LEVEL` | Logging verbosity (`INFO`, `DEBUG`). | `INFO` |
 
 ## Configuration
@@ -56,7 +59,7 @@ services:
 ### Permissions
 The bot creates a `permissions.json` file in the `/app/data` volume. You can manage permissions dynamically from Discord:
 *   `!perm list`: View current permissions.
-*   `!perm add <action> <role>`: Allow a role to perform an action (start/stop/restart).
+*   `!perm add <action> <role>`: Allow a role to perform an action (`start`, `stop`, `restart`, `announce`).
 *   `!perm remove <action> <role>`: Revoke permission.
 
 ### In-Game Announcements
@@ -81,6 +84,7 @@ Prefix: `!`
 *   `!restart`: Announce restart, wait for delay, then restart.
 *   `!status`: Check if the container is running.
 *   `!announce <message>`: Send a message to the server console/chat.
+*   `!guide`: Show a quick command reference in Discord.
 
 ## License
 

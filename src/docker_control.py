@@ -1,4 +1,5 @@
 import asyncio
+import logging
 import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import Optional
@@ -38,7 +39,8 @@ def _find_container_by_name(client, name: str):
         return client.containers.get(name)
     except docker.errors.NotFound:
         return None
-    except Exception:
+    except Exception as e:
+        logging.warning(f"Unexpected error looking up container {name!r}: {e}")
         return None
 
 

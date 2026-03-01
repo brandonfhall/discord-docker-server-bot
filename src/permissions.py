@@ -15,9 +15,10 @@ def _ensure_file():
     if not os.path.exists(PERMISSIONS_FILE):
         logging.info(f"Initializing permissions file at: {os.path.abspath(PERMISSIONS_FILE)}")
         data = {
-            "start": DEFAULT_ALLOWED_ROLES,
-            "stop": DEFAULT_ALLOWED_ROLES,
-            "restart": DEFAULT_ALLOWED_ROLES,
+            "start": list(DEFAULT_ALLOWED_ROLES),
+            "stop": list(DEFAULT_ALLOWED_ROLES),
+            "restart": list(DEFAULT_ALLOWED_ROLES),
+            "announce": list(DEFAULT_ALLOWED_ROLES),
         }
         with open(PERMISSIONS_FILE, "w") as f:
             json.dump(data, f, indent=2)
@@ -25,8 +26,18 @@ def _ensure_file():
 
 def _load() -> Dict[str, List[str]]:
     _ensure_file()
-    with open(PERMISSIONS_FILE, "r") as f:
-        return json.load(f)
+    try:
+        with open(PERMISSIONS_FILE, "r") as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        logging.error(f"Permissions file {PERMISSIONS_FILE} is corrupted. Re-initializing with defaults.")
+        try:
+            os.remove(PERMISSIONS_FILE)
+        except OSError as e:
+            logging.warning(f"Could not remove corrupted permissions file: {e}")
+        _ensure_file()
+        with open(PERMISSIONS_FILE, "r") as f:
+            return json.load(f)
 
 
 def _save(data: Dict[str, List[str]]):

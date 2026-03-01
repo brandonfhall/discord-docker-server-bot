@@ -33,8 +33,8 @@ This project provides a Dockerized Discord bot to manage a container running in 
 
    | Variable | Description | Default |
    | :--- | :--- | :--- |
-   | `BOT_TOKEN` | **Required**. Your Discord Bot Token. | - |
-   | `ALLOWED_CONTAINERS` | The name of the container this bot controls. | - |
+   | `BOT_TOKEN` | **Required**. Your Discord Bot Token. The bot will not start without this. | - |
+   | `ALLOWED_CONTAINERS` | **Required**. Comma-separated container name(s) this bot may control. The bot will not start without this. | - |
    | `DEFAULT_ALLOWED_ROLES` | Comma-separated list of Discord role names allowed to use control commands initially. | `ServerAdmin` |
    | `STATUS_TOKEN` | Token required for the `/status` API. If not set, the API is open (no auth). | `None` |
    | `DISCORD_GUILD_ID` | **Recommended**. The ID of your Discord server. If set, the bot ignores commands from other servers/DMs. | `0` (Disabled) |
@@ -73,7 +73,7 @@ Requires specific permissions (default: `ServerAdmin` role).
 Requires `Administrator` permission in Discord.
 
 - `!perm list`: Lists all roles allowed to perform specific actions.
-- `!perm add <action> <role_name>`: Grants a role permission for an action (actions: `start`, `stop`, `restart`).
+- `!perm add <action> <role_name>`: Grants a role permission for an action (actions: `start`, `stop`, `restart`, `announce`).
 - `!perm remove <action> <role_name>`: Revokes permission.
 
 ## HTTP API
