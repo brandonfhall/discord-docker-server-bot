@@ -13,7 +13,8 @@ from discord.ext import commands
 from . import docker_control
 from .config import (
     BOT_TOKEN, STATUS_TOKEN, STATUS_PORT, SHUTDOWN_DELAY, ALLOWED_CONTAINERS,
-    DISCORD_GUILD_ID, LOG_FILE, ANNOUNCE_CHANNEL_ID, ANNOUNCE_ROLE_ID
+    DISCORD_GUILD_ID, LOG_FILE, ANNOUNCE_CHANNEL_ID, ANNOUNCE_ROLE_ID,
+    ALLOWED_CHANNEL_IDS
 )
 from . import permissions
 
@@ -94,6 +95,11 @@ async def check_guild(ctx):
     # If DISCORD_GUILD_ID is set, reject commands from other guilds or DMs
     if DISCORD_GUILD_ID and (not ctx.guild or ctx.guild.id != DISCORD_GUILD_ID):
         return False
+
+    # If ALLOWED_CHANNEL_IDS is set, reject commands from other channels
+    if ALLOWED_CHANNEL_IDS and ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return False
+
     return True
 
 
