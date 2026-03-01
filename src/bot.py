@@ -2,7 +2,7 @@ import asyncio
 import logging
 import os
 from logging.handlers import RotatingFileHandler
-from datetime import datetime
+from datetime import datetime, timezone
 from collections import deque
 
 import uvicorn
@@ -158,7 +158,7 @@ async def send_announcement(ctx, message: str):
 
 @bot.event
 async def on_ready():
-    print(f"Bot ready: {bot.user} at {datetime.utcnow().isoformat()} UTC")
+    logging.info(f"Bot ready: {bot.user} at {datetime.now(timezone.utc).isoformat()} UTC")
     logging.info(f"Logging to file: {os.path.abspath(LOG_FILE)}")
     logging.info(f"Permissions file: {os.path.abspath(permissions.PERMISSIONS_FILE)}")
     if not STATUS_TOKEN:

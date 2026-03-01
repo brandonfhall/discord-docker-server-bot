@@ -47,4 +47,17 @@ ANNOUNCE_CHANNEL_ID = _int_env("ANNOUNCE_CHANNEL_ID", 0)
 
 ANNOUNCE_ROLE_ID = _int_env("ANNOUNCE_ROLE_ID", 0)
 
-ALLOWED_CHANNEL_IDS = [int(c.strip()) for c in os.getenv("ALLOWED_CHANNEL_IDS", "").split(",") if c.strip().isdigit()]
+def _parse_channel_ids(raw: str) -> list:
+    result = []
+    for c in raw.split(","):
+        c = c.strip()
+        if not c:
+            continue
+        if c.isdigit():
+            result.append(int(c))
+        else:
+            print(f"WARNING: ALLOWED_CHANNEL_IDS contains non-numeric entry {c!r}, skipping", file=sys.stderr)
+    return result
+
+
+ALLOWED_CHANNEL_IDS = _parse_channel_ids(os.getenv("ALLOWED_CHANNEL_IDS", ""))
