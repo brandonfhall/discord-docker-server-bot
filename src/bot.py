@@ -18,6 +18,8 @@ from .config import (
 )
 from . import permissions
 
+VALID_ACTIONS = {"start", "stop", "restart", "announce"}
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 # Ensure log directory exists
@@ -134,33 +136,22 @@ async def resolve_container(ctx, name: str):
 
 async def send_announcement(ctx, message: str):
     """Helper to send announcements to the configured channel/role."""
-    content = message
-
-    # Parse Role ID (handle empty strings/spaces)
-    role_id = None
-    if ANNOUNCE_ROLE_ID and str(ANNOUNCE_ROLE_ID).strip():
-        try:
-            role_id = int(str(ANNOUNCE_ROLE_ID).strip())
-        except ValueError:
-            logging.warning(f"Invalid ANNOUNCE_ROLE_ID: {ANNOUNCE_ROLE_ID}")
-
-    if role_id:
-        content = f"<@&{role_id}> {message}"
+    content = f"<@&{ANNOUNCE_ROLE_ID}> {message}" if ANNOUNCE_ROLE_ID else message
 
     target_channel = ctx.channel
-    if ANNOUNCE_CHANNEL_ID and str(ANNOUNCE_CHANNEL_ID).strip():
-        try:
-            cid = int(str(ANNOUNCE_CHANNEL_ID).strip())
-            found = bot.get_channel(cid)
-            if found:
-                target_channel = found
-            else:
-                logging.warning(f"Configured ANNOUNCE_CHANNEL_ID {cid} not found.")
-        except ValueError:
-            logging.warning(f"Invalid ANNOUNCE_CHANNEL_ID: {ANNOUNCE_CHANNEL_ID}")
+    if ANNOUNCE_CHANNEL_ID:
+        found = bot.get_channel(ANNOUNCE_CHANNEL_ID)
+        if found:
+            target_channel = found
+        else:
+            logging.warning(f"Configured ANNOUNCE_CHANNEL_ID {ANNOUNCE_CHANNEL_ID} not found.")
 
-    await target_channel.send(content)
-    # If we sent it elsewhere, confirm in the command channel
+    try:
+        await target_channel.send(content)
+    except Exception as e:
+        logging.error(f"Failed to send announcement to {target_channel}: {e}", exc_info=True)
+        return
+
     if target_channel.id != ctx.channel.id:
         await ctx.send(f"Announcement sent to {target_channel.mention}.")
 
@@ -170,6 +161,8 @@ async def on_ready():
     print(f"Bot ready: {bot.user} at {datetime.utcnow().isoformat()} UTC")
     logging.info(f"Logging to file: {os.path.abspath(LOG_FILE)}")
     logging.info(f"Permissions file: {os.path.abspath(permissions.PERMISSIONS_FILE)}")
+    if not STATUS_TOKEN:
+        logging.warning("STATUS_TOKEN is not set — the /status API endpoint is open to unauthenticated access")
 
 
 @bot.event
@@ -210,11 +203,7 @@ async def on_command_error(ctx, error):
         # However, special-case the permission management command so admins
         # get helpful usage feedback instead of silence.
         content = ctx.message.content or ""
-        prefix = bot.command_prefix
-        if not isinstance(prefix, str):
-            prefix = "!"
-
-        if content.startswith(f"{prefix}perm"):
+        if content.startswith(f"{bot.command_prefix}perm"):
             # Only respond with usage if the user is allowed to use this command.
             if ctx.author.guild_permissions.administrator:
                 await ctx.send("Usage: `!perm <add|remove|list> ...`")
@@ -255,9 +244,12 @@ async def stop(ctx, container_name: str = None):
     # schedule stop
     async def do_stop():
         await asyncio.sleep(SHUTDOWN_DELAY)
-        result = await docker_control.run_blocking(docker_control.stop_container, target)
-        logging.info(f"STOP execution result for {target}: {result}")
-        await ctx.send(f"Stop result: {result}")
+        try:
+            result = await docker_control.run_blocking(docker_control.stop_container, target)
+            logging.info(f"STOP execution result for {target}: {result}")
+            await ctx.send(f"Stop result: {result}")
+        except Exception as e:
+            logging.error(f"Error during scheduled stop of {target}: {e}", exc_info=True)
 
     bot.loop.create_task(do_stop())
 
@@ -277,9 +269,12 @@ async def restart(ctx, container_name: str = None):
 
     async def do_restart():
         await asyncio.sleep(SHUTDOWN_DELAY)
-        result = await docker_control.run_blocking(docker_control.restart_container, target)
-        logging.info(f"RESTART execution result for {target}: {result}")
-        await ctx.send(f"Restart result: {result}")
+        try:
+            result = await docker_control.run_blocking(docker_control.restart_container, target)
+            logging.info(f"RESTART execution result for {target}: {result}")
+            await ctx.send(f"Restart result: {result}")
+        except Exception as e:
+            logging.error(f"Error during scheduled restart of {target}: {e}", exc_info=True)
 
     bot.loop.create_task(do_restart())
 
@@ -362,6 +357,9 @@ async def perm(ctx):
 @perm.command(name="add")
 async def perm_add(ctx, action: str, *, role_name: str):
     """Adds a role to an action."""
+    if action not in VALID_ACTIONS:
+        await ctx.send(f"Unknown action `{action}`. Valid actions: {', '.join(sorted(VALID_ACTIONS))}")
+        return
     permissions.add_role(action, role_name)
     logging.info(f"User {ctx.author} ADDED role '{role_name}' to action '{action}'")
     await ctx.send(f"Added role {role_name} to {action}")
@@ -370,6 +368,9 @@ async def perm_add(ctx, action: str, *, role_name: str):
 @perm.command(name="remove")
 async def perm_remove(ctx, action: str, *, role_name: str):
     """Removes a role from an action."""
+    if action not in VALID_ACTIONS:
+        await ctx.send(f"Unknown action `{action}`. Valid actions: {', '.join(sorted(VALID_ACTIONS))}")
+        return
     permissions.remove_role(action, role_name)
     logging.info(f"User {ctx.author} REMOVED role '{role_name}' from action '{action}'")
     await ctx.send(f"Removed role {role_name} from {action}")

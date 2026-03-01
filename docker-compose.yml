@@ -22,6 +22,8 @@ services:
       - LOG_FILE
       - ANNOUNCE_CHANNEL_ID
       - ANNOUNCE_ROLE_ID
+      - STATUS_TOKEN
+      - ALLOWED_CHANNEL_IDS
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Defaults to rw, required for start/stop
       - ./data:/app/data

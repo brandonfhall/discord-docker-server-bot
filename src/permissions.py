@@ -25,8 +25,15 @@ def _ensure_file():
 
 def _load() -> Dict[str, List[str]]:
     _ensure_file()
-    with open(PERMISSIONS_FILE, "r") as f:
-        return json.load(f)
+    try:
+        with open(PERMISSIONS_FILE, "r") as f:
+            return json.load(f)
+    except json.JSONDecodeError:
+        logging.error(f"Permissions file {PERMISSIONS_FILE} is corrupted. Re-initializing with defaults.")
+        os.remove(PERMISSIONS_FILE)
+        _ensure_file()
+        with open(PERMISSIONS_FILE, "r") as f:
+            return json.load(f)
 
 
 def _save(data: Dict[str, List[str]]):
