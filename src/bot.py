@@ -204,7 +204,7 @@ async def on_command_error(ctx, error):
             await ctx.send("Usage: `!perm <add|remove|list> ...`")
         else:
             # Generic fallback for other commands with missing args.
-            await ctx.send("Missing required argument(s) for this command. Use `!help` for details.")
+            await ctx.send(f"Usage: `!{cmd} ...` — see `!help` for details.")
     elif isinstance(error, commands.CommandNotFound):
         # For unknown commands, normally stay quiet to avoid noise.
         # However, special-case the permission management command so admins
@@ -314,7 +314,7 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
         message = f"{arg1} {arg2}" if arg2 else arg1
 
     if not target or not message:
-        await ctx.send(f"Usage: !announce <container_name> <message>\nAvailable: {', '.join(ALLOWED_CONTAINERS)}")
+        await ctx.send(f"Usage: `!announce <container_name> <message>`\nAvailable: {', '.join(ALLOWED_CONTAINERS)}")
         return
 
     res = await docker_control.run_blocking(docker_control.announce_in_game, target, message)
@@ -356,7 +356,7 @@ async def guide(ctx):
 async def perm(ctx):
     """Manages permissions (Admins only)."""
     if ctx.invoked_subcommand is None:
-        await ctx.send("subcommands: add, remove, list")
+        await ctx.send("Usage: `!perm <add|remove|list>`")
 
 
 @perm.command(name="add")
