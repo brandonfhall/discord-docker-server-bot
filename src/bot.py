@@ -190,7 +190,18 @@ async def on_command_error(ctx, error):
         logging.warning(f"Permission denied for user {ctx.author} on command {ctx.command}")
         await ctx.send("You do not have permission to use this command.")
     elif isinstance(error, commands.CommandNotFound):
-        pass
+        # For unknown commands, normally stay quiet to avoid noise.
+        # However, special-case the permission management command so admins
+        # get helpful usage feedback instead of silence.
+        content = ctx.message.content or ""
+        prefix = bot.command_prefix
+        if not isinstance(prefix, str):
+            prefix = "!"
+
+        if content.startswith(f"{prefix}perm"):
+            # Only respond with usage if the user is allowed to use this command.
+            if ctx.author.guild_permissions.administrator:
+                await ctx.send("Usage: `!perm <add|remove|list> ...`")
     else:
         logging.error(f"Command error: {error}", exc_info=True)
 
@@ -376,6 +387,9 @@ async def perm_error(ctx, error):
             await ctx.send("Usage: `!perm remove <action> <role_name>`")
         else:
             await ctx.send("Usage: `!perm <add|remove|list> ...`")
+    elif isinstance(error, commands.UserInputError):
+        # Any other user input error within the perm group should show generic usage.
+        await ctx.send("Usage: `!perm <add|remove|list> ...`")
     else:
         await on_command_error(ctx, error)
 
