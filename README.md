@@ -40,6 +40,7 @@ This project provides a Dockerized Discord bot to manage a container running in 
    | `DISCORD_GUILD_ID` | **Recommended**. The ID of your Discord server. If set, the bot ignores commands from other servers/DMs. | `0` (Disabled) |
    | `ANNOUNCE_CHANNEL_ID` | The ID of the Discord channel to send shutdown/restart announcements to. | `0` (Current Channel) |
    | `ANNOUNCE_ROLE_ID` | The ID of a Discord role to mention (@Role) during announcements. | `0` (None) |
+   | `ALLOWED_CHANNEL_IDS` | Comma-separated list of Channel IDs where commands are allowed. If blank, all channels are allowed. | `None` |
    | `CONTAINER_MESSAGE_CMD` | Shell command to send a message to the container. | `echo "Message: {message}"` |
    | `SHUTDOWN_DELAY` | Time in seconds to wait between announcement and action. | `300` (5 mins) |
    | `STATUS_PORT` | Port for the local HTTP status API. | `8000` |

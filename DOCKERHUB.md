@@ -48,6 +48,7 @@ services:
 | `CONTAINER_MESSAGE_CMD` | Shell command to send a message to the container. Use `{message}` as placeholder. | `echo "Message: {message}"` |
 | `DISCORD_GUILD_ID` | Optional. Lock the bot to a specific Discord server ID. | `0` (Disabled) |
 | `ANNOUNCE_CHANNEL_ID` | Optional. Channel ID for shutdown announcements. | `0` (Current Channel) |
+| `ALLOWED_CHANNEL_IDS` | Optional. Comma-separated list of Channel IDs where commands are allowed. | `None` (All Channels) |
 | `LOG_LEVEL` | Logging verbosity (`INFO`, `DEBUG`). | `INFO` |
 
 ## Configuration

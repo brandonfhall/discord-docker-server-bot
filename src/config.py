@@ -28,3 +28,5 @@ DISCORD_GUILD_ID = int(os.getenv("DISCORD_GUILD_ID", "0"))
 ANNOUNCE_CHANNEL_ID = int(os.getenv("ANNOUNCE_CHANNEL_ID", "0"))
 
 ANNOUNCE_ROLE_ID = int(os.getenv("ANNOUNCE_ROLE_ID", "0"))
+
+ALLOWED_CHANNEL_IDS = [int(c.strip()) for c in os.getenv("ALLOWED_CHANNEL_IDS", "").split(",") if c.strip().isdigit()]
