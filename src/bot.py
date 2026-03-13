@@ -180,6 +180,9 @@ async def on_message(message):
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, commands.CheckFailure):
+        # If the command came from a disallowed channel, silently ignore it
+        if ALLOWED_CHANNEL_IDS and ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+            return
         logging.warning(f"Permission denied for user {ctx.author} on command {ctx.command}")
         await ctx.send("You do not have permission to use this command.")
     elif isinstance(error, commands.MissingRequiredArgument):
