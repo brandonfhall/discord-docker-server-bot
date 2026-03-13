@@ -185,6 +185,22 @@ class TestDockerControl(unittest.TestCase):
     def test_docker_security_checks(self):
         self.assertIn("not allowed", docker_control.start_container("evil_container"))
 
+    @patch("src.docker_control.docker.from_env")
+    def test_announce_in_game_nonzero_exit_code(self, mock_from_env):
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.containers.get.return_value = mock_container
+
+        mock_exec = MagicMock()
+        mock_exec.exit_code = 1
+        mock_exec.output = b"command not found"
+        mock_container.exec_run.return_value = mock_exec
+
+        with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
+            result = docker_control.announce_in_game("my_game_server", "Hello")
+        self.assertTrue(result.startswith("error (1):"))
+
 
 # ---------------------------------------------------------------------------
 # permissions
@@ -419,6 +435,173 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         from src import bot as bot_module
         for action in ("start", "stop", "restart", "announce"):
             self.assertIn(action, bot_module.VALID_ACTIONS)
+
+    # --- check_guild ---
+
+    async def test_check_guild_passes_all_checks(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.guild = MagicMock()
+        ctx.guild.id = 42
+        ctx.channel.id = 100
+        with patch.object(bot_module, "DISCORD_GUILD_ID", 42):
+            with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", [100, 200]):
+                self.assertTrue(await bot_module.check_guild(ctx))
+
+    async def test_check_guild_dm_with_guild_restriction(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.guild = None  # DM has no guild
+        with patch.object(bot_module, "DISCORD_GUILD_ID", 42):
+            self.assertFalse(await bot_module.check_guild(ctx))
+
+    # --- resolve_container ---
+
+    async def test_resolve_container_empty_list(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", []):
+            result = await bot_module.resolve_container(ctx, None)
+        self.assertIsNone(result)
+        ctx.send.assert_called_once()
+        self.assertIn("No allowed containers", ctx.send.call_args[0][0])
+
+    # --- send_announcement ---
+
+    async def test_send_announcement_to_configured_channel(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.send = AsyncMock()
+
+        target_channel = MagicMock()
+        target_channel.id = 200
+        target_channel.mention = "#announcements"
+        target_channel.send = AsyncMock()
+
+        with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 200):
+            with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                with patch.object(bot_module.bot, "get_channel", return_value=target_channel):
+                    await bot_module.send_announcement(ctx, "Hello!")
+
+        target_channel.send.assert_called_once_with("Hello!")
+        # Should also confirm to the command channel
+        ctx.send.assert_called_once()
+        self.assertIn(target_channel.mention, ctx.send.call_args[0][0])
+
+    async def test_send_announcement_channel_not_found_falls_back(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+
+        with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 999):
+            with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                with patch.object(bot_module.bot, "get_channel", return_value=None):
+                    with self.assertLogs(level="WARNING"):
+                        await bot_module.send_announcement(ctx, "Hello!")
+
+        ctx.channel.send.assert_called_once_with("Hello!")
+
+    # --- on_command_error: MissingRequiredArgument ---
+
+    async def test_on_command_error_missing_arg_perm_add(self):
+        from src import bot as bot_module
+        from discord.ext import commands
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.command = MagicMock()
+        ctx.command.qualified_name = "perm add"
+        error = commands.MissingRequiredArgument(MagicMock())
+        with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
+            await bot_module.on_command_error(ctx, error)
+        self.assertIn("perm add", ctx.send.call_args[0][0])
+
+    async def test_on_command_error_missing_arg_perm_remove(self):
+        from src import bot as bot_module
+        from discord.ext import commands
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.command = MagicMock()
+        ctx.command.qualified_name = "perm remove"
+        error = commands.MissingRequiredArgument(MagicMock())
+        with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
+            await bot_module.on_command_error(ctx, error)
+        self.assertIn("perm remove", ctx.send.call_args[0][0])
+
+    async def test_on_command_error_missing_arg_perm_generic(self):
+        from src import bot as bot_module
+        from discord.ext import commands
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.command = MagicMock()
+        ctx.command.qualified_name = "perm"
+        error = commands.MissingRequiredArgument(MagicMock())
+        with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
+            await bot_module.on_command_error(ctx, error)
+        self.assertIn("!perm", ctx.send.call_args[0][0])
+
+    async def test_on_command_error_missing_arg_other_command(self):
+        from src import bot as bot_module
+        from discord.ext import commands
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.command = MagicMock()
+        ctx.command.qualified_name = "announce"
+        error = commands.MissingRequiredArgument(MagicMock())
+        with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
+            await bot_module.on_command_error(ctx, error)
+        self.assertIn("!announce", ctx.send.call_args[0][0])
+
+    # --- on_command_error: CommandNotFound ---
+
+    async def test_on_command_error_command_not_found_perm_admin_gets_usage(self):
+        from src import bot as bot_module
+        from discord.ext import commands
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.message.content = "!perm badsubcmd"
+        ctx.author.guild_permissions.administrator = True
+        error = commands.CommandNotFound("perm badsubcmd")
+        with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
+            await bot_module.on_command_error(ctx, error)
+        ctx.send.assert_called_once()
+        self.assertIn("!perm", ctx.send.call_args[0][0])
+
+    async def test_on_command_error_command_not_found_perm_non_admin_silent(self):
+        from src import bot as bot_module
+        from discord.ext import commands
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.message.content = "!perm badsubcmd"
+        ctx.author.guild_permissions.administrator = False
+        error = commands.CommandNotFound("perm badsubcmd")
+        with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
+            await bot_module.on_command_error(ctx, error)
+        ctx.send.assert_not_called()
+
+    async def test_on_command_error_command_not_found_other_silent(self):
+        from src import bot as bot_module
+        from discord.ext import commands
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.message.content = "!unknowncmd"
+        error = commands.CommandNotFound("unknowncmd")
+        with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
+            await bot_module.on_command_error(ctx, error)
+        ctx.send.assert_not_called()
+
+    async def test_on_command_error_unexpected_error_is_logged(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        error = RuntimeError("something broke")
+        with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
+            with self.assertLogs(level="ERROR"):
+                await bot_module.on_command_error(ctx, error)
 
     async def test_on_command_error_silent_in_disallowed_channel(self):
         """CheckFailure from a disallowed channel should produce no response."""
