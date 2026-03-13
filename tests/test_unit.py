@@ -420,6 +420,34 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         for action in ("start", "stop", "restart", "announce"):
             self.assertIn(action, bot_module.VALID_ACTIONS)
 
+    async def test_on_command_error_silent_in_disallowed_channel(self):
+        """CheckFailure from a disallowed channel should produce no response."""
+        from src import bot as bot_module
+        from discord.ext import commands
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel.id = 999
+        ctx.command = MagicMock()
+        error = commands.CheckFailure("not allowed")
+        with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", [100, 200]):
+            await bot_module.on_command_error(ctx, error)
+        ctx.send.assert_not_called()
+
+    async def test_on_command_error_responds_in_allowed_channel(self):
+        """CheckFailure from an allowed channel (role denied) should still respond."""
+        from src import bot as bot_module
+        from discord.ext import commands
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel.id = 100
+        ctx.author = MagicMock()
+        ctx.command = MagicMock()
+        error = commands.CheckFailure("not allowed")
+        with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", [100, 200]):
+            await bot_module.on_command_error(ctx, error)
+        ctx.send.assert_called_once()
+        self.assertIn("permission", ctx.send.call_args[0][0].lower())
+
 
 if __name__ == "__main__":
     unittest.main()
