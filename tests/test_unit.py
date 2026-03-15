@@ -1,3 +1,5 @@
+import asyncio
+import logging
 import os
 
 # Set required env vars before any src imports so config.py validation passes.
@@ -638,6 +640,184 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
             await bot_module.on_command_error(ctx, error)
         ctx.send.assert_called_once()
         self.assertIn("permission", ctx.send.call_args[0][0].lower())
+
+
+# ---------------------------------------------------------------------------
+# _RedactingFilter — token redaction at log source
+# ---------------------------------------------------------------------------
+
+class TestRedactingFilter(unittest.TestCase):
+    """Tests for the log-level token redaction filter applied at startup."""
+
+    def setUp(self):
+        from src.bot import _RedactingFilter
+        self._RedactingFilter = _RedactingFilter
+
+    def _make_record(self, msg, args=()):
+        return logging.LogRecord("test", logging.INFO, "", 0, msg, args, None)
+
+    def test_redacts_token_in_message(self):
+        f = self._RedactingFilter(["supersecret"])
+        record = self._make_record("auth token supersecret leaked")
+        f.filter(record)
+        self.assertNotIn("supersecret", record.msg)
+        self.assertIn("[REDACTED]", record.msg)
+
+    def test_redacts_token_in_formatted_args(self):
+        """Token appearing via %-style formatting is redacted after expansion."""
+        f = self._RedactingFilter(["supersecret"])
+        record = self._make_record("token is %s", ("supersecret",))
+        f.filter(record)
+        self.assertNotIn("supersecret", record.msg)
+        self.assertEqual(record.args, ())
+
+    def test_redacts_multiple_tokens(self):
+        f = self._RedactingFilter(["tok1", "tok2"])
+        record = self._make_record("tok1 and tok2 both present")
+        f.filter(record)
+        self.assertNotIn("tok1", record.msg)
+        self.assertNotIn("tok2", record.msg)
+
+    def test_skips_empty_and_none_tokens(self):
+        """Empty/None entries in token list must not raise errors."""
+        f = self._RedactingFilter(["", None, "realtoken"])
+        record = self._make_record("realtoken here")
+        f.filter(record)
+        self.assertNotIn("realtoken", record.msg)
+
+    def test_preserves_clean_message(self):
+        f = self._RedactingFilter(["secrettoken"])
+        record = self._make_record("normal log message")
+        f.filter(record)
+        self.assertEqual(record.msg, "normal log message")
+
+    def test_always_returns_true(self):
+        f = self._RedactingFilter(["token"])
+        record = self._make_record("some message")
+        self.assertTrue(f.filter(record))
+
+    def test_empty_token_list_is_noop(self):
+        f = self._RedactingFilter([])
+        record = self._make_record("message stays unchanged")
+        f.filter(record)
+        self.assertEqual(record.msg, "message stays unchanged")
+
+
+# ---------------------------------------------------------------------------
+# _pending_ops — stop/restart deduplication
+# ---------------------------------------------------------------------------
+
+class TestPendingOps(unittest.IsolatedAsyncioTestCase):
+    """Tests for the _pending_ops dict that prevents duplicate stop/restart tasks."""
+
+    def setUp(self):
+        from src import bot as bot_module
+        self.bot_module = bot_module
+        bot_module._pending_ops.clear()
+
+    def tearDown(self):
+        for task in list(self.bot_module._pending_ops.values()):
+            if asyncio.isfuture(task) and not task.done():
+                task.cancel()
+        self.bot_module._pending_ops.clear()
+
+    async def test_stop_rejects_duplicate_when_pending(self):
+        """!stop while a task is already pending should send a rejection message."""
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+
+        fake_task = MagicMock()
+        fake_task.done.return_value = False
+        bot_module._pending_ops["test_container"] = fake_task
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
+            await bot_module.stop.callback(ctx, "test_container")
+
+        ctx.send.assert_called_once()
+        self.assertIn("already scheduled", ctx.send.call_args[0][0].lower())
+
+    async def test_restart_rejects_duplicate_when_pending(self):
+        """!restart while a task is already pending should send a rejection message."""
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+
+        fake_task = MagicMock()
+        fake_task.done.return_value = False
+        bot_module._pending_ops["test_container"] = fake_task
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
+            await bot_module.restart.callback(ctx, "test_container")
+
+        ctx.send.assert_called_once()
+        self.assertIn("already scheduled", ctx.send.call_args[0][0].lower())
+
+    async def test_stop_proceeds_and_registers_task_when_no_pending_op(self):
+        """A fresh !stop should send the countdown message and register the task."""
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        mock_loop = MagicMock()
+
+        def _create_task(coro):
+            coro.close()  # prevent "coroutine never awaited" warning
+            return mock_task
+
+        mock_loop.create_task.side_effect = _create_task
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="ok")):
+                        with patch.object(bot_module.bot, "loop", mock_loop):
+                            await bot_module.stop.callback(ctx, "test_container")
+
+        # Countdown message sent (not a rejection)
+        first_msg = ctx.send.call_args_list[0][0][0]
+        self.assertIn("will stop", first_msg)
+        # Task registered
+        self.assertIn("test_container", bot_module._pending_ops)
+        self.assertIs(bot_module._pending_ops["test_container"], mock_task)
+
+    async def test_second_stop_rejected_after_first_registers_task(self):
+        """After the first !stop schedules a task, a second !stop is rejected."""
+        bot_module = self.bot_module
+        ctx1 = MagicMock()
+        ctx1.send = AsyncMock()
+        ctx1.channel = MagicMock()
+        ctx1.channel.id = 100
+        ctx1.channel.send = AsyncMock()
+
+        ctx2 = MagicMock()
+        ctx2.send = AsyncMock()
+
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        mock_loop = MagicMock()
+
+        def _create_task(coro):
+            coro.close()  # prevent "coroutine never awaited" warning
+            return mock_task
+
+        mock_loop.create_task.side_effect = _create_task
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="ok")):
+                        with patch.object(bot_module.bot, "loop", mock_loop):
+                            await bot_module.stop.callback(ctx1, "test_container")
+                            await bot_module.stop.callback(ctx2, "test_container")
+
+        ctx2.send.assert_called_once()
+        self.assertIn("already scheduled", ctx2.send.call_args[0][0].lower())
 
 
 if __name__ == "__main__":
