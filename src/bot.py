@@ -416,6 +416,9 @@ async def perm_error(ctx, error):
     elif isinstance(error, commands.UserInputError):
         # Any other user input error within the perm group should show generic usage.
         await ctx.send("Usage: `!perm <add|remove|list> ...`")
+    elif isinstance(error, commands.CheckFailure):
+        logging.warning(f"Permission denied for user {ctx.author} on command {ctx.command}")
+        await ctx.send("You do not have permission to use this command.")
     else:
         await on_command_error(ctx, error)
 

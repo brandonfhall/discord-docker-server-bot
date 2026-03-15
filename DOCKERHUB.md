@@ -15,6 +15,32 @@ A secure, lightweight Discord bot designed to control a specific Docker containe
     *   Can be locked to a specific Discord Guild ID.
     *   Only controls containers explicitly allowed in the configuration.
 
+## Adding the Bot to Discord
+
+### 1. Create a Discord Application & Bot
+
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
+2. Click **New Application**, give it a name
+3. Go to the **Bot** tab → click **Add Bot**
+4. Click **Reset Token** and copy it — this is your `BOT_TOKEN`
+5. Scroll down and enable **Message Content Intent** (required for `!` prefix commands)
+
+### 2. Invite the Bot to Your Server
+
+1. In the Developer Portal, go to **OAuth2 → URL Generator**
+2. Under **Scopes**, check `bot`
+3. Under **Bot Permissions**, check at minimum:
+   - `Send Messages`
+   - `Read Message History`
+   - `View Channels`
+   - `Mention Everyone` (only if using `ANNOUNCE_ROLE_ID`)
+4. Copy the generated URL and open it in your browser to invite the bot
+
+### 3. Get Your Guild (Server) ID
+
+1. In Discord, enable **Developer Mode**: User Settings → Advanced → Developer Mode
+2. Right-click your server name → **Copy Server ID** — this is your `DISCORD_GUILD_ID`
+
 ## Quick Start
 
 ### Docker Compose
