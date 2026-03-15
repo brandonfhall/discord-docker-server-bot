@@ -278,6 +278,10 @@ async def stop(ctx, container_name: str = None):
         await ctx.send(f"A shutdown or restart is already scheduled for `{target}`. Ignoring duplicate request.")
         return
 
+    # Reserve the slot immediately before any awaits so concurrent duplicate
+    # commands see the container as pending even during the countdown sends.
+    _pending_ops[target] = bot.loop.create_future()
+
     await ctx.send(f"Server {target} will stop in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     msg = f"Server will shut down in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
     await send_announcement(ctx, msg)
@@ -308,6 +312,10 @@ async def restart(ctx, container_name: str = None):
     if target in _pending_ops and not _pending_ops[target].done():
         await ctx.send(f"A shutdown or restart is already scheduled for `{target}`. Ignoring duplicate request.")
         return
+
+    # Reserve the slot immediately before any awaits so concurrent duplicate
+    # commands see the container as pending even during the countdown sends.
+    _pending_ops[target] = bot.loop.create_future()
 
     await ctx.send(f"Server {target} will restart in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     msg = f"Server will restart in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
@@ -456,8 +464,7 @@ async def perm_error(ctx, error):
         # Any other user input error within the perm group should show generic usage.
         await ctx.send("Usage: `!perm <add|remove|list> ...`")
     elif isinstance(error, commands.CheckFailure):
-        logging.warning(f"Permission denied for user {ctx.author} on command {ctx.command}")
-        await ctx.send("You do not have permission to use this command.")
+        return  # global on_command_error already handles CheckFailure
     else:
         await on_command_error(ctx, error)
 
