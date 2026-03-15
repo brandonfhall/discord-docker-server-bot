@@ -21,12 +21,38 @@ from . import permissions
 
 VALID_ACTIONS = {"start", "stop", "restart", "announce"}
 
+# Tracks in-flight stop/restart tasks per container name so duplicate
+# commands don't stack up and trigger multiple Docker operations.
+_pending_ops: dict = {}
+
+
+def _cancel_pending(container: str):
+    task = _pending_ops.pop(container, None)
+    if task and not task.done():
+        task.cancel()
+
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
 # Ensure log directory exists
 log_dir = os.path.dirname(LOG_FILE)
 if log_dir and not os.path.exists(log_dir):
     os.makedirs(log_dir)
+
+class _RedactingFilter(logging.Filter):
+    """Strips sensitive token values from log records before they reach any handler."""
+    def __init__(self, tokens):
+        super().__init__()
+        self._tokens = [t for t in tokens if t]
+
+    def filter(self, record):
+        if self._tokens:
+            msg = record.getMessage()
+            for token in self._tokens:
+                msg = msg.replace(token, "[REDACTED]")
+            record.msg = msg
+            record.args = ()
+        return True
+
 
 logging.basicConfig(
     level=LOG_LEVEL,
@@ -38,6 +64,11 @@ logging.basicConfig(
         RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=1)
     ]
 )
+
+# Attach the redacting filter to every handler so tokens never appear on disk or stdout.
+_redact_filter = _RedactingFilter([BOT_TOKEN, STATUS_TOKEN])
+for _handler in logging.root.handlers:
+    _handler.addFilter(_redact_filter)
 
 app = FastAPI()
 
@@ -242,17 +273,19 @@ async def stop(ctx, container_name: str = None):
     if not target:
         return
     logging.info(f"User {ctx.author} requested STOP for container '{target}'")
+
+    if target in _pending_ops and not _pending_ops[target].done():
+        await ctx.send(f"A shutdown or restart is already scheduled for `{target}`. Ignoring duplicate request.")
+        return
+
     await ctx.send(f"Server {target} will stop in {SHUTDOWN_DELAY//60} minutes (countdown started).")
-    # announce immediately
     msg = f"Server will shut down in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
-    # announce in discord channel
     await send_announcement(ctx, msg)
-    # announce in-game
     await docker_control.run_blocking(docker_control.announce_in_game, target, msg)
 
-    # schedule stop
     async def do_stop():
         await asyncio.sleep(SHUTDOWN_DELAY)
+        _pending_ops.pop(target, None)
         try:
             result = await docker_control.run_blocking(docker_control.stop_container, target)
             logging.info(f"STOP execution result for {target}: {result}")
@@ -260,7 +293,7 @@ async def stop(ctx, container_name: str = None):
         except Exception as e:
             logging.error(f"Error during scheduled stop of {target}: {e}", exc_info=True)
 
-    bot.loop.create_task(do_stop())
+    _pending_ops[target] = bot.loop.create_task(do_stop())
 
 
 @bot.command()
@@ -271,6 +304,11 @@ async def restart(ctx, container_name: str = None):
     if not target:
         return
     logging.info(f"User {ctx.author} requested RESTART for container '{target}'")
+
+    if target in _pending_ops and not _pending_ops[target].done():
+        await ctx.send(f"A shutdown or restart is already scheduled for `{target}`. Ignoring duplicate request.")
+        return
+
     await ctx.send(f"Server {target} will restart in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     msg = f"Server will restart in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
     await send_announcement(ctx, msg)
@@ -278,6 +316,7 @@ async def restart(ctx, container_name: str = None):
 
     async def do_restart():
         await asyncio.sleep(SHUTDOWN_DELAY)
+        _pending_ops.pop(target, None)
         try:
             result = await docker_control.run_blocking(docker_control.restart_container, target)
             logging.info(f"RESTART execution result for {target}: {result}")
@@ -285,7 +324,7 @@ async def restart(ctx, container_name: str = None):
         except Exception as e:
             logging.error(f"Error during scheduled restart of {target}: {e}", exc_info=True)
 
-    bot.loop.create_task(do_restart())
+    _pending_ops[target] = bot.loop.create_task(do_restart())
 
 
 @bot.command(name="status")
