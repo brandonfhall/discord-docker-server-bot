@@ -20,7 +20,7 @@ def _ensure_file():
             "restart": list(DEFAULT_ALLOWED_ROLES),
             "announce": list(DEFAULT_ALLOWED_ROLES),
         }
-        with open(PERMISSIONS_FILE, "w") as f:
+        with open(PERMISSIONS_FILE, "w", opener=lambda path, flags: __import__('os').open(path, flags, 0o600)) as f:
             json.dump(data, f, indent=2)
 
 
