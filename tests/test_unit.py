@@ -318,8 +318,8 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     def test_root_redirects_to_status(self):
         from fastapi.testclient import TestClient
         from src.bot import app
-        client = TestClient(app, follow_redirects=False)
-        response = client.get("/")
+        client = TestClient(app)
+        response = client.get("/", follow_redirects=False)
         self.assertEqual(response.status_code, 307)
         self.assertEqual(response.headers["location"], "/status")
 
