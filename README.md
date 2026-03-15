@@ -81,12 +81,15 @@ Developer Mode (enabled above) also lets you copy channel and role IDs.
    | `CONTAINER_MESSAGE_CMD` | Shell command to send a message to the container. | `echo "Message: {message}"` |
    | `SHUTDOWN_DELAY` | Time in seconds to wait between announcement and action. | `300` (5 mins) |
    | `STATUS_PORT` | Port for the local HTTP status API. | `8000` |
+   | `DOCKER_MAX_WORKERS` | Max concurrent Docker operations. | `2` |
    | `LOG_LEVEL` | Logging verbosity (`INFO`, `DEBUG`, etc.). | `INFO` |
 
 4. **Run the Bot**:
    ```bash
    docker compose up -d --build
    ```
+
+> **Security Note**: The bot requires read/write access to `/var/run/docker.sock`, which grants full control over the Docker daemon on the host. Only run this bot on a trusted host and ensure your Discord bot token and `STATUS_TOKEN` are kept secret.
 
 ## Discord Commands
 
@@ -98,10 +101,10 @@ Prefix: `!`
 ### Control Commands
 Requires specific permissions (default: `ServerAdmin` role).
 
-- `!start <container_name>`: Starts the specified container.
-- `!stop <container_name>`: Announces shutdown, waits for delay, then stops the container.
-- `!restart <container_name>`: Announces restart, waits for delay, then restarts the container.
-- `!announce [container_name] <message>`: Sends an in-game announcement. If only one container is configured, the name is optional.
+- `!start [container_name]`: Starts the container. Container name is required when multiple containers are configured.
+- `!stop [container_name]`: Announces shutdown, waits for delay, then stops the container.
+- `!restart [container_name]`: Announces restart, waits for delay, then restarts the container.
+- `!announce [container_name] <message>`: Sends an in-game announcement.
 
 ### Status
 - `!status`: Shows the current status (running, exited, etc.) of the container.

@@ -41,6 +41,19 @@ A secure, lightweight Discord bot designed to control a specific Docker containe
 1. In Discord, enable **Developer Mode**: User Settings → Advanced → Developer Mode
 2. Right-click your server name → **Copy Server ID** — this is your `DISCORD_GUILD_ID`
 
+### 4. Get Channel and Role IDs
+
+Developer Mode (enabled above) also lets you copy channel and role IDs.
+
+**Channel IDs** (`ANNOUNCE_CHANNEL_ID`, `ALLOWED_CHANNEL_IDS`):
+- Right-click any channel in the sidebar → **Copy Channel ID**
+
+**Role IDs** (`ANNOUNCE_ROLE_ID`):
+- Go to **Server Settings → Roles**
+- Right-click the role → **Copy Role ID**
+
+> **Security Note**: The bot requires read/write access to `/var/run/docker.sock`, which grants full control over the Docker daemon on the host. Only run this bot on a trusted host and keep your `BOT_TOKEN` and `STATUS_TOKEN` secret.
+
 ## Quick Start
 
 ### Docker Compose
@@ -55,12 +68,15 @@ services:
       # Required: Allows the bot to control the host docker daemon
       - /var/run/docker.sock:/var/run/docker.sock
       # Optional: Persist logs and permissions
-      - ./bot-data:/app/data
+      - bot_data:/app/data
     environment:
       - BOT_TOKEN=your_discord_bot_token
       - ALLOWED_CONTAINERS=my_game_server
       - DEFAULT_ALLOWED_ROLES=ServerAdmin
       - SHUTDOWN_DELAY=300
+
+volumes:
+  bot_data:
 ```
 
 ### Environment Variables
@@ -78,6 +94,7 @@ services:
 | `ANNOUNCE_ROLE_ID` | Optional. Role ID to @mention during announcements. | `0` (None) |
 | `ALLOWED_CHANNEL_IDS` | Optional. Comma-separated list of Channel IDs where commands are allowed. | `None` (All Channels) |
 | `STATUS_PORT` | Port for the local HTTP status API. | `8000` |
+| `DOCKER_MAX_WORKERS` | Max concurrent Docker operations. | `2` |
 | `LOG_LEVEL` | Logging verbosity (`INFO`, `DEBUG`). | `INFO` |
 
 ## Configuration
@@ -105,11 +122,11 @@ CONTAINER_MESSAGE_CMD=rcon-cli say "{message}"
 
 Prefix: `!`
 
-*   `!start`: Start the container.
-*   `!stop`: Announce shutdown, wait for delay, then stop.
-*   `!restart`: Announce restart, wait for delay, then restart.
+*   `!start [container_name]`: Start the container. Name required when multiple containers are configured.
+*   `!stop [container_name]`: Announce shutdown, wait for delay, then stop.
+*   `!restart [container_name]`: Announce restart, wait for delay, then restart.
 *   `!status`: Check if the container is running.
-*   `!announce <message>`: Send a message to the server console/chat.
+*   `!announce [container_name] <message>`: Send a message to the server console/chat.
 *   `!guide`: Show a quick command reference in Discord.
 
 ## License
