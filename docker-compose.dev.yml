@@ -10,7 +10,7 @@ services:
     container_name: discord_bot
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./data:/app/data
+      - bot_data:/app/data
       # Mount src directory for live code updates (requires restart)
       - ./src:/app/src
     environment:
@@ -28,3 +28,6 @@ services:
       - STATUS_TOKEN
     ports:
       - "8000:8000"
+
+volumes:
+  bot_data:
