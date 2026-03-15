@@ -27,7 +27,7 @@ jobs:
         python -m pip install --upgrade pip
         pip install flake8 pytest
         # Install LATEST runtime dependencies for unit tests (ignoring pinned versions in requirements.txt)
-        pip install --upgrade discord.py docker fastapi "uvicorn[standard]" python-dotenv
+        pip install --upgrade discord.py docker fastapi "uvicorn[standard]" python-dotenv httpx
 
     - name: Lint with flake8
       run: |
