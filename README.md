@@ -44,6 +44,17 @@ This project provides a Dockerized Discord bot to manage a container running in 
 1. In Discord, enable **Developer Mode**: User Settings → Advanced → Developer Mode
 2. Right-click your server name → **Copy Server ID** — this is your `DISCORD_GUILD_ID`
 
+### 4. Get Channel and Role IDs
+
+Developer Mode (enabled above) also lets you copy channel and role IDs.
+
+**Channel IDs** (`ANNOUNCE_CHANNEL_ID`, `ALLOWED_CHANNEL_IDS`):
+- Right-click any channel in the sidebar → **Copy Channel ID**
+
+**Role IDs** (`ANNOUNCE_ROLE_ID`):
+- Go to **Server Settings → Roles**
+- Right-click the role → **Copy Role ID**
+
 ## Setup
 
 1. **Clone the repository** and navigate to the directory.
