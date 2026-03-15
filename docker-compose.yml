@@ -26,7 +26,10 @@ services:
       - ALLOWED_CHANNEL_IDS
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Defaults to rw, required for start/stop
-      - ./data:/app/data
+      - bot_data:/app/data
     restart: unless-stopped
     ports:
       - "8000:8000" # status endpoint
+
+volumes:
+  bot_data:
