@@ -80,6 +80,9 @@ Requires `Administrator` permission in Discord.
 
 The bot exposes a simple JSON API on port `8000` (mapped in docker-compose).
 
+**GET /**
+Redirects to `/status`.
+
 **GET /status**
 Requires authentication via `STATUS_TOKEN` (if configured).
 

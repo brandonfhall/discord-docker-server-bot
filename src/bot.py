@@ -7,6 +7,7 @@ from collections import deque
 
 import uvicorn
 from fastapi import FastAPI, Header, HTTPException, Depends, Query
+from fastapi.responses import RedirectResponse
 import discord
 from discord.ext import commands
 
@@ -52,6 +53,11 @@ async def verify_token(
     token = x_auth_token or query_token
     if not token or token != STATUS_TOKEN:
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+@app.get("/")
+def root():
+    return RedirectResponse(url="/status")
 
 
 @app.get("/status", dependencies=[Depends(verify_token)])

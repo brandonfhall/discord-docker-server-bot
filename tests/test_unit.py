@@ -315,6 +315,14 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(result)
         self.assertIn("not in the allowed list", ctx.send.call_args[0][0])
 
+    def test_root_redirects_to_status(self):
+        from fastapi.testclient import TestClient
+        from src.bot import app
+        client = TestClient(app, follow_redirects=False)
+        response = client.get("/")
+        self.assertEqual(response.status_code, 307)
+        self.assertEqual(response.headers["location"], "/status")
+
     async def test_verify_token_no_token_configured(self):
         from src import bot as bot_module
         original = bot_module.STATUS_TOKEN
