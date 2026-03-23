@@ -83,6 +83,8 @@ Developer Mode (enabled above) also lets you copy channel and role IDs.
    | `STATUS_PORT` | Port for the local HTTP status API. | `8000` |
    | `DOCKER_MAX_WORKERS` | Max concurrent Docker operations. | `2` |
    | `LOG_LEVEL` | Logging verbosity (`INFO`, `DEBUG`, etc.). | `INFO` |
+   | `PERMISSIONS_FILE` | Path to the role permissions JSON file. | `data/permissions.json` |
+   | `LOG_FILE` | Path to the bot log file. | `data/bot.log` |
 
 4. **Run the Bot**:
    ```bash
