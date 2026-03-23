@@ -9,10 +9,24 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      web:
+        patterns:
+          - "fastapi"
+          - "uvicorn*"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      docker-actions:
+        patterns:
+          - "docker/*"
+      actions:
+        patterns:
+          - "actions/*"
+
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
