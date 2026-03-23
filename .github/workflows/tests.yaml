@@ -9,6 +9,12 @@ on:
 permissions:
   contents: read
 
+# Cancel any in-progress run for the same branch when a newer commit arrives.
+# This prevents the double-run caused by push + pull_request both firing on the same commit.
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   test:
     runs-on: ubuntu-latest
