@@ -188,6 +188,37 @@ class TestDockerControl(unittest.TestCase):
         self.assertIn("not allowed", docker_control.start_container("evil_container"))
 
     @patch("src.docker_control.docker.from_env")
+    def test_announce_in_game_no_message_placeholder(self, mock_from_env):
+        """When CONTAINER_MESSAGE_CMD has no {message} placeholder the else-branch is used."""
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.containers.get.return_value = mock_container
+        mock_exec = MagicMock()
+        mock_exec.exit_code = 0
+        mock_exec.output = b""
+        mock_container.exec_run.return_value = mock_exec
+
+        with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
+            with patch("src.docker_control.CONTAINER_MESSAGE_CMD", "rcon-cli say"):
+                result = docker_control.announce_in_game("my_game_server", "Hello")
+        self.assertEqual(result, "ok")
+        mock_container.exec_run.assert_called_once_with(["rcon-cli", "say", "Hello"])
+
+    @patch("src.docker_control.docker.from_env")
+    def test_announce_in_game_exec_exception(self, mock_from_env):
+        """exec_run raising an exception returns an error string."""
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.containers.get.return_value = mock_container
+        mock_container.exec_run.side_effect = RuntimeError("exec failed")
+
+        with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
+            result = docker_control.announce_in_game("my_game_server", "Hello")
+        self.assertTrue(result.startswith("error:"))
+
+    @patch("src.docker_control.docker.from_env")
     def test_announce_in_game_nonzero_exit_code(self, mock_from_env):
         mock_client = MagicMock()
         mock_container = MagicMock()
@@ -818,6 +849,96 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
 
         ctx2.send.assert_called_once()
         self.assertIn("already scheduled", ctx2.send.call_args[0][0].lower())
+
+
+# ---------------------------------------------------------------------------
+# /status API endpoint
+# ---------------------------------------------------------------------------
+
+class TestStatusEndpoint(unittest.TestCase):
+    """Tests for the FastAPI /status route."""
+
+    def test_status_returns_expected_structure(self):
+        from fastapi.testclient import TestClient
+        from src import bot as bot_module
+        with patch.object(bot_module, "STATUS_TOKEN", None):
+            with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
+                with patch("src.bot.docker_control.container_status", return_value="running"):
+                    with patch("src.bot.permissions.list_permissions", return_value={"start": ["admin"]}):
+                        client = TestClient(bot_module.app)
+                        response = client.get("/status")
+        self.assertEqual(response.status_code, 200)
+        data = response.json()
+        self.assertTrue(data["ok"])
+        self.assertIn("containers", data)
+        self.assertIn("permissions", data)
+        self.assertIn("logs", data)
+        self.assertEqual(data["containers"]["test_container"], "running")
+
+    def test_status_requires_token_when_configured(self):
+        from fastapi.testclient import TestClient
+        from src import bot as bot_module
+        with patch.object(bot_module, "STATUS_TOKEN", "secret"):
+            client = TestClient(bot_module.app)
+            response = client.get("/status")
+        self.assertEqual(response.status_code, 401)
+
+    def test_status_accepts_token_via_header(self):
+        from fastapi.testclient import TestClient
+        from src import bot as bot_module
+        with patch.object(bot_module, "STATUS_TOKEN", "secret"):
+            with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
+                with patch("src.bot.docker_control.container_status", return_value="running"):
+                    with patch("src.bot.permissions.list_permissions", return_value={}):
+                        client = TestClient(bot_module.app)
+                        response = client.get("/status", headers={"X-Auth-Token": "secret"})
+        self.assertEqual(response.status_code, 200)
+
+    def test_status_accepts_token_via_query_param(self):
+        from fastapi.testclient import TestClient
+        from src import bot as bot_module
+        with patch.object(bot_module, "STATUS_TOKEN", "secret"):
+            with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
+                with patch("src.bot.docker_control.container_status", return_value="running"):
+                    with patch("src.bot.permissions.list_permissions", return_value={}):
+                        client = TestClient(bot_module.app)
+                        response = client.get("/status?token=secret")
+        self.assertEqual(response.status_code, 200)
+
+
+# ---------------------------------------------------------------------------
+# _cancel_pending
+# ---------------------------------------------------------------------------
+
+class TestCancelPending(unittest.TestCase):
+    """Tests for the _cancel_pending helper that aborts scheduled stop/restart tasks."""
+
+    def setUp(self):
+        from src import bot as bot_module
+        self.bot_module = bot_module
+        bot_module._pending_ops.clear()
+
+    def tearDown(self):
+        self.bot_module._pending_ops.clear()
+
+    def test_cancels_active_task(self):
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        self.bot_module._pending_ops["srv"] = mock_task
+        self.bot_module._cancel_pending("srv")
+        mock_task.cancel.assert_called_once()
+        self.assertNotIn("srv", self.bot_module._pending_ops)
+
+    def test_noop_for_unknown_container(self):
+        self.bot_module._cancel_pending("nonexistent")  # Should not raise
+
+    def test_does_not_cancel_completed_task(self):
+        mock_task = MagicMock()
+        mock_task.done.return_value = True
+        self.bot_module._pending_ops["srv"] = mock_task
+        self.bot_module._cancel_pending("srv")
+        mock_task.cancel.assert_not_called()
+        self.assertNotIn("srv", self.bot_module._pending_ops)
 
 
 if __name__ == "__main__":
