@@ -1,138 +1,154 @@
-# Docker Controller Discord Bot
+# Discord Docker Controller Bot
 
-**Docker Hub Image:** [brandonh317/discord-docker-bot](https://hub.docker.com/r/brandonh317/discord-docker-bot)
+[![Tests](https://github.com/brandonfhall/discord-docker-server-bot/actions/workflows/tests.yaml/badge.svg)](https://github.com/brandonfhall/discord-docker-server-bot/actions/workflows/tests.yaml)
+[![Docker Hub](https://img.shields.io/docker/v/brandonh317/discord-docker-bot?label=Docker%20Hub)](https://hub.docker.com/r/brandonh317/discord-docker-bot)
 
-This project provides a Dockerized Discord bot to manage a container running in Docker. It allows you to start, stop, and restart the server from Discord, handles in-game shutdown announcements, and manages permissions via Discord roles. Designed to control a single specific container.
+A Discord bot that controls Docker containers (game servers, services, etc.) through `!` prefix commands. Manage start, stop, restart, and in-game announcements — all from Discord with role-based permissions.
 
 ## Features
 
-- **Container Control**: Start, Stop, and Restart the Docker container.
-- **Graceful Shutdowns**: Automatically announces shutdowns/restarts in-game and waits for a configurable delay before stopping the container.
-- **Permission System**: Restrict commands to specific Discord roles. Admins can manage these permissions dynamically.
-- **Guild Locking**: Restrict the bot to a specific Discord server for security.
-- **Status API**: Exposes a local HTTP endpoint for monitoring container status.
+- **Multi-Container Control** — Start, stop, and restart one or more Docker containers.
+- **Graceful Shutdowns** — Announces shutdowns/restarts in Discord and in-game, then waits a configurable delay before acting.
+- **Immediate Stop** — `!stop now` bypasses the countdown for emergencies (separate permission).
+- **Role-Based Permissions** — Restrict commands to specific Discord roles, manageable live via `!perm` commands.
+- **Guild & Channel Locking** — Restrict the bot to a specific Discord server and/or set of channels.
+- **Status API** — HTTP endpoint exposing container status, permissions, and recent logs.
+- **Security** — Strict container name allowlist, input sanitization, and log token redaction.
 
-## Prerequisites
+## Quick Start
 
-- Docker and Docker Compose installed on the host machine.
-- A Discord Bot Token (from the Discord Developer Portal).
-- The ID of your Discord server (Guild ID).
+```bash
+cp .env.example .env   # fill in BOT_TOKEN and ALLOWED_CONTAINERS
+docker compose up -d --build
+```
 
-## Adding the Bot to Discord
+## Discord Bot Setup
 
-### 1. Create a Discord Application & Bot
+### 1. Create a Bot
 
-1. Go to the [Discord Developer Portal](https://discord.com/developers/applications)
-2. Click **New Application**, give it a name
-3. Go to the **Bot** tab → click **Add Bot**
-4. Click **Reset Token** and copy it — this is your `BOT_TOKEN`
-5. Scroll down and enable **Message Content Intent** (required for `!` prefix commands)
+1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
+2. Click **New Application** and name it.
+3. Go to **Bot** tab, click **Add Bot**, then **Reset Token** — copy it as your `BOT_TOKEN`.
+4. Enable **Message Content Intent** (required for `!` prefix commands).
 
-### 2. Invite the Bot to Your Server
+### 2. Invite the Bot
 
-1. In the Developer Portal, go to **OAuth2 → URL Generator**
-2. Under **Scopes**, check `bot`
-3. Under **Bot Permissions**, check at minimum:
-   - `Send Messages`
-   - `Read Message History`
-   - `View Channels`
-   - `Mention Everyone` (only if using `ANNOUNCE_ROLE_ID`)
-4. Copy the generated URL and open it in your browser to invite the bot
+1. Go to **OAuth2 > URL Generator**.
+2. Scopes: `bot`.
+3. Permissions: `Send Messages`, `Read Message History`, `View Channels` (add `Mention Everyone` if using `ANNOUNCE_ROLE_ID`).
+4. Open the generated URL to invite.
 
-### 3. Get Your Guild (Server) ID
+### 3. Get IDs
 
-1. In Discord, enable **Developer Mode**: User Settings → Advanced → Developer Mode
-2. Right-click your server name → **Copy Server ID** — this is your `DISCORD_GUILD_ID`
+Enable **Developer Mode** in Discord (User Settings > Advanced) to copy IDs by right-clicking:
 
-### 4. Get Channel and Role IDs
+| What | Where to find | Used for |
+|---|---|---|
+| Server (Guild) ID | Right-click server name | `DISCORD_GUILD_ID` |
+| Channel ID | Right-click channel | `ANNOUNCE_CHANNEL_ID`, `ALLOWED_CHANNEL_IDS` |
+| Role ID | Server Settings > Roles > right-click | `ANNOUNCE_ROLE_ID` |
 
-Developer Mode (enabled above) also lets you copy channel and role IDs.
+## Environment Variables
 
-**Channel IDs** (`ANNOUNCE_CHANNEL_ID`, `ALLOWED_CHANNEL_IDS`):
-- Right-click any channel in the sidebar → **Copy Channel ID**
+| Variable | Required | Description | Default |
+|---|---|---|---|
+| `BOT_TOKEN` | Yes | Discord bot token | — |
+| `ALLOWED_CONTAINERS` | Yes | Comma-separated container names to control | — |
+| `DEFAULT_ALLOWED_ROLES` | | Roles allowed to use commands on first run | `ServerAdmin` |
+| `DISCORD_GUILD_ID` | | Lock bot to one Discord server | `0` (any) |
+| `ANNOUNCE_CHANNEL_ID` | | Channel for shutdown/restart announcements | `0` (command channel) |
+| `ANNOUNCE_ROLE_ID` | | Role to @mention during announcements | `0` (none) |
+| `ALLOWED_CHANNEL_IDS` | | Comma-separated channel IDs where commands work | (all) |
+| `STATUS_TOKEN` | | Auth token for the `/status` HTTP API | (open) |
+| `CONTAINER_MESSAGE_CMD` | | Shell command template for in-game messages | `echo "Message: {message}"` |
+| `SHUTDOWN_DELAY` | | Seconds between announcement and stop/restart | `300` |
+| `STATUS_PORT` | | Port for the HTTP status API | `8000` |
+| `DOCKER_MAX_WORKERS` | | Max concurrent Docker operations | `2` |
+| `LOG_LEVEL` | | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) | `INFO` |
+| `PERMISSIONS_FILE` | | Path to permissions JSON file | `data/permissions.json` |
+| `LOG_FILE` | | Path to log file | `data/bot.log` |
 
-**Role IDs** (`ANNOUNCE_ROLE_ID`):
-- Go to **Server Settings → Roles**
-- Right-click the role → **Copy Role ID**
+See [.env.example](.env.example) for a copy-paste template.
 
-## Setup
+## Commands
 
-1. **Clone the repository** and navigate to the directory.
+All commands use the `!` prefix. Container name is optional when only one container is configured.
 
-2. **Prepare Data Directory**:
-   The bot will automatically create a `data/` directory and a `permissions.json` file on the first run.
+### Control
 
-3. **Configure Environment**:
-   Copy the example environment file:
-   `cp .env.example .env`
-   
-   Edit `.env` and ensure the environment variables are set correctly.
+| Command | Permission | Description |
+|---|---|---|
+| `!start [container]` | `start` | Start the container |
+| `!stop [container]` | `stop` | Announce shutdown, wait for delay, then stop |
+| `!stop [container] now` | `stop` + `stop_now` | Immediately stop (skips countdown, cancels pending) |
+| `!restart [container]` | `restart` | Announce restart, wait for delay, then restart |
+| `!announce [container] <message>` | `announce` | Send a message to the server console |
+| `!status [container]` | — | Show container status |
+| `!guide` | — | Show a quick command reference |
 
-   | Variable | Description | Default |
-   | :--- | :--- | :--- |
-   | `BOT_TOKEN` | **Required**. Your Discord Bot Token. The bot will not start without this. | - |
-   | `ALLOWED_CONTAINERS` | **Required**. Comma-separated container name(s) this bot may control. The bot will not start without this. | - |
-   | `DEFAULT_ALLOWED_ROLES` | Comma-separated list of Discord role names allowed to use control commands initially. | `ServerAdmin` |
-   | `STATUS_TOKEN` | Token required for the `/status` API. If not set, the API is open (no auth). | `None` |
-   | `DISCORD_GUILD_ID` | **Recommended**. The ID of your Discord server. If set, the bot ignores commands from other servers/DMs. | `0` (Disabled) |
-   | `ANNOUNCE_CHANNEL_ID` | The ID of the Discord channel to send shutdown/restart announcements to. | `0` (Current Channel) |
-   | `ANNOUNCE_ROLE_ID` | The ID of a Discord role to mention (@Role) during announcements. | `0` (None) |
-   | `ALLOWED_CHANNEL_IDS` | Comma-separated list of Channel IDs where commands are allowed. If blank, all channels are allowed. | `None` |
-   | `CONTAINER_MESSAGE_CMD` | Shell command to send a message to the container. | `echo "Message: {message}"` |
-   | `SHUTDOWN_DELAY` | Time in seconds to wait between announcement and action. | `300` (5 mins) |
-   | `STATUS_PORT` | Port for the local HTTP status API. | `8000` |
-   | `DOCKER_MAX_WORKERS` | Max concurrent Docker operations. | `2` |
-   | `LOG_LEVEL` | Logging verbosity (`INFO`, `DEBUG`, etc.). | `INFO` |
-   | `PERMISSIONS_FILE` | Path to the role permissions JSON file. | `data/permissions.json` |
-   | `LOG_FILE` | Path to the bot log file. | `data/bot.log` |
+### Permission Management (Admin only)
 
-4. **Run the Bot**:
-   ```bash
-   docker compose up -d --build
-   ```
+| Command | Description |
+|---|---|
+| `!perm list` | List roles allowed for each action |
+| `!perm add <action> <role>` | Grant a role permission for an action |
+| `!perm remove <action> <role>` | Revoke a role's permission |
 
-> **Security Note**: The bot requires read/write access to `/var/run/docker.sock`, which grants full control over the Docker daemon on the host. Only run this bot on a trusted host and ensure your Discord bot token and `STATUS_TOKEN` are kept secret.
+Valid actions: `start`, `stop`, `stop_now`, `restart`, `announce`.
 
-## Discord Commands
+Discord Administrators bypass all permission checks.
 
-Prefix: `!`
+## HTTP Status API
 
-### General
-- `!guide`: Shows a simple usage guide.
+**`GET /status`** — Returns container status, permissions, and recent logs as JSON.
 
-### Control Commands
-Requires specific permissions (default: `ServerAdmin` role).
+Authentication (when `STATUS_TOKEN` is set):
+- Header: `X-Auth-Token: <token>`
+- Query param: `/status?token=<token>`
 
-- `!start [container_name]`: Starts the container. Container name is required when multiple containers are configured.
-- `!stop [container_name]`: Announces shutdown, waits for delay, then stops the container.
-- `!restart [container_name]`: Announces restart, waits for delay, then restarts the container.
-- `!announce [container_name] <message>`: Sends an in-game announcement.
+**`GET /`** — Redirects to `/status`.
 
-### Status
-- `!status`: Shows the current status (running, exited, etc.) of the container.
+## In-Game Announcements
 
-### Permission Management
-Requires `Administrator` permission in Discord.
+Configure `CONTAINER_MESSAGE_CMD` with a `{message}` placeholder. The message is sanitized to alphanumeric + basic punctuation, truncated to 100 characters.
 
-- `!perm list`: Lists all roles allowed to perform specific actions.
-- `!perm add <action> <role_name>`: Grants a role permission for an action (actions: `start`, `stop`, `restart`, `announce`).
-- `!perm remove <action> <role_name>`: Revokes permission.
+**Valheim (screen):**
+```
+CONTAINER_MESSAGE_CMD=screen -S valheim -p 0 -X stuff "say {message}\015"
+```
 
-## HTTP API
+**Minecraft (RCON):**
+```
+CONTAINER_MESSAGE_CMD=rcon-cli say "{message}"
+```
 
-The bot exposes a simple JSON API on port `8000` (mapped in docker-compose).
+## Development
 
-**GET /**
-Redirects to `/status`.
+### Running Tests
 
-**GET /status**
-Requires authentication via `STATUS_TOKEN` (if configured).
+```bash
+export PYTHONPATH=.
+pytest -v tests/
+```
 
-Methods:
-1. **Header**: `X-Auth-Token: <YOUR_TOKEN>`
-2. **URL Parameter**: `http://localhost:8000/status?token=<YOUR_TOKEN>`
+No Docker daemon required — all Docker calls are mocked.
 
-Returns a JSON object containing:
-- `containers`: Status of the allowed container.
-- `permissions`: Current role permissions.
-- `logs`: The most recent 50 log lines.
+### Local Dev
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
+
+Mounts `src/` for live code updates (container restart required to pick up changes).
+
+## Security
+
+- The bot requires `/var/run/docker.sock` access, granting full Docker daemon control on the host. Run only on trusted hosts.
+- Keep `BOT_TOKEN` and `STATUS_TOKEN` secret.
+- Container names are validated against a strict allowlist regex before any Docker call.
+- All announcement messages are sanitized before being passed to `exec_run`.
+- Sensitive tokens are redacted from all log output.
+
+## License
+
+MIT

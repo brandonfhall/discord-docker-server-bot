@@ -79,13 +79,14 @@ No Docker daemon is required — all Docker calls are mocked.
 
 ### Pending ops deduplication
 
-- `_pending_ops` (dict in `bot.py`) tracks in-flight `stop`/`restart` tasks per container. Duplicate commands while a task is pending are rejected with a user-facing message. A `Future` placeholder is registered *before* any `await` to prevent race conditions.
+- `_pending_ops` (dict in `bot.py`) tracks in-flight `stop`/`restart` tasks per container. Duplicate commands while a task is pending are rejected with a user-facing message. A `Future` placeholder is registered *before* any `await` to prevent race conditions. `!stop now` cancels any pending countdown for that container before issuing the immediate stop.
 
 ### Permissions
 
 - Stored in `data/permissions.json` (path configurable via `PERMISSIONS_FILE`).
 - Created on first run with defaults from `DEFAULT_ALLOWED_ROLES`.
 - Corrupted file is automatically re-initialized with defaults.
+- Missing actions are automatically backfilled on load (via `_EXPECTED_ACTIONS` in `permissions.py`), so existing installs pick up new actions without manual intervention.
 - Discord `Administrator` permission bypasses the role check entirely.
 
 ## Environment Variables
@@ -95,6 +96,16 @@ See `.env.example` for the full list with descriptions. Required: `BOT_TOKEN`, `
 ## Adding a New Command
 
 1. Add the handler in `src/bot.py` using `@bot.command()` + `@has_permission("<action>")`.
-2. If it's a permissioned action, add the action name to `VALID_ACTIONS` in `bot.py`.
+2. If it's a permissioned action, add the action name to `VALID_ACTIONS` in `bot.py` and `_EXPECTED_ACTIONS` in `permissions.py`.
 3. Add corresponding unit tests to `tests/test_unit.py`.
 4. Update the Discord Commands section in `README.md` and `DOCKERHUB.md`.
+
+## Branching & Commit SOP
+
+All changes should go through a feature branch and PR:
+
+1. Create a feature branch from `main`: `git checkout -b <type>/<short-description>` (e.g., `feat/stop-now`, `fix/pending-ops-race`, `docs/rewrite-readme`).
+2. Make changes and run `pytest -v tests/` to verify all tests pass.
+3. Commit with a clear message describing the change.
+4. Push the branch and open a PR against `main`.
+5. CI (`tests.yaml`) must pass before merge. `docker-publish.yml` runs on merge to `main` or version tags.

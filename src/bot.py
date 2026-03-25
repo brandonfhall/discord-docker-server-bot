@@ -19,7 +19,7 @@ from .config import (
 )
 from . import permissions
 
-VALID_ACTIONS = {"start", "stop", "restart", "announce"}
+VALID_ACTIONS = {"start", "stop", "stop_now", "restart", "announce"}
 
 # Tracks in-flight stop/restart tasks per container name so duplicate
 # commands don't stack up and trigger multiple Docker operations.
@@ -267,11 +267,34 @@ async def start(ctx, container_name: str = None):
 
 @bot.command()
 @has_permission("stop")
-async def stop(ctx, container_name: str = None):
-    """Stops the container (with countdown)."""
+async def stop(ctx, arg1: str = None, arg2: str = None):
+    """Stops the container. Use '!stop now' for immediate shutdown (requires stop_now permission)."""
+    # Parse arguments: either could be the "now" flag or a container name
+    now = False
+    container_name = None
+    for arg in (arg1, arg2):
+        if arg and arg.lower() == "now":
+            now = True
+        elif arg:
+            container_name = arg
+
     target = await resolve_container(ctx, container_name)
     if not target:
         return
+
+    if now:
+        if not ctx.author.guild_permissions.administrator and not permissions.is_member_allowed("stop_now", ctx.author):
+            await ctx.send("You do not have permission to use `!stop now`.")
+            return
+
+        logging.info(f"User {ctx.author} requested immediate STOP for container '{target}'")
+        _cancel_pending(target)
+        await ctx.send(f"Stopping {target} immediately...")
+        res = await docker_control.run_blocking(docker_control.stop_container, target)
+        logging.info(f"Immediate STOP result for {ctx.author}: {res}")
+        await ctx.send(f"Stop result: {res}")
+        return
+
     logging.info(f"User {ctx.author} requested STOP for container '{target}'")
 
     if target in _pending_ops and not _pending_ops[target].done():
@@ -390,6 +413,7 @@ async def guide(ctx):
         "**Control**",
         "`!start`   : Start the server",
         "`!stop`    : Stop the server (with delay)",
+        "`!stop now`: Stop the server immediately",
         "`!restart` : Restart the server (with delay)",
         "`!status`  : Show server status",
         "",

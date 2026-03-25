@@ -5,6 +5,10 @@ from typing import Dict, List
 
 from .config import PERMISSIONS_FILE, DEFAULT_ALLOWED_ROLES
 
+# Actions that should always have an entry in the permissions file.
+# When new actions are added, include them here so existing installs get backfilled.
+_EXPECTED_ACTIONS = {"start", "stop", "stop_now", "restart", "announce"}
+
 
 def _ensure_file():
     # Ensure directory exists
@@ -17,6 +21,7 @@ def _ensure_file():
         data = {
             "start": list(DEFAULT_ALLOWED_ROLES),
             "stop": list(DEFAULT_ALLOWED_ROLES),
+            "stop_now": list(DEFAULT_ALLOWED_ROLES),
             "restart": list(DEFAULT_ALLOWED_ROLES),
             "announce": list(DEFAULT_ALLOWED_ROLES),
         }
@@ -28,7 +33,7 @@ def _load() -> Dict[str, List[str]]:
     _ensure_file()
     try:
         with open(PERMISSIONS_FILE, "r") as f:
-            return json.load(f)
+            data = json.load(f)
     except json.JSONDecodeError:
         logging.error(f"Permissions file {PERMISSIONS_FILE} is corrupted. Re-initializing with defaults.")
         try:
@@ -37,7 +42,17 @@ def _load() -> Dict[str, List[str]]:
             logging.warning(f"Could not remove corrupted permissions file: {e}")
         _ensure_file()
         with open(PERMISSIONS_FILE, "r") as f:
-            return json.load(f)
+            data = json.load(f)
+
+    # Backfill any new actions missing from existing permission files
+    missing = [a for a in _EXPECTED_ACTIONS if a not in data]
+    if missing:
+        for action in missing:
+            data[action] = list(DEFAULT_ALLOWED_ROLES)
+        logging.info(f"Backfilled missing permission actions: {missing}")
+        _save(data)
+
+    return data
 
 
 def _save(data: Dict[str, List[str]]):
