@@ -290,6 +290,9 @@ async def stop(ctx, arg1: str = None, arg2: str = None):
         logging.info(f"User {ctx.author} requested immediate STOP for container '{target}'")
         _cancel_pending(target)
         await ctx.send(f"Stopping {target} immediately...")
+        msg = "Server is shutting down NOW. Please disconnect immediately."
+        await send_announcement(ctx, msg)
+        await docker_control.run_blocking(docker_control.announce_in_game, target, msg)
         res = await docker_control.run_blocking(docker_control.stop_container, target)
         logging.info(f"Immediate STOP result for {ctx.author}: {res}")
         await ctx.send(f"Stop result: {res}")

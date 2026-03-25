@@ -1079,26 +1079,66 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         bot_module = self.bot_module
         ctx = MagicMock()
         ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
         ctx.author.guild_permissions.administrator = True
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
-            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
-                await bot_module.stop.callback(ctx, arg1="now")
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
+                        await bot_module.stop.callback(ctx, arg1="now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("immediately" in c for c in calls))
         self.assertTrue(any("stopped" in c for c in calls))
+
+    async def test_stop_now_sends_announcements(self):
+        """!stop now should send Discord and in-game announcements before stopping."""
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+        ctx.author.guild_permissions.administrator = True
+
+        run_blocking_calls = []
+        async def mock_run_blocking(func, *args, **kwargs):
+            run_blocking_calls.append((func.__name__, args))
+            return "stopped" if func.__name__ == "stop_container" else "ok"
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
+                        await bot_module.stop.callback(ctx, arg1="now")
+
+        # Discord announcement sent to channel
+        ctx.channel.send.assert_called_once()
+        announcement = ctx.channel.send.call_args[0][0]
+        self.assertIn("NOW", announcement)
+
+        # In-game announcement was called before stop
+        func_names = [c[0] for c in run_blocking_calls]
+        self.assertEqual(func_names, ["announce_in_game", "stop_container"])
 
     async def test_stop_now_with_container_name(self):
         """!stop server1 now should parse both args correctly."""
         bot_module = self.bot_module
         ctx = MagicMock()
         ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
         ctx.author.guild_permissions.administrator = True
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
-            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
-                await bot_module.stop.callback(ctx, arg1="server1", arg2="now")
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
+                        await bot_module.stop.callback(ctx, arg1="server1", arg2="now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("server1" in c and "immediately" in c for c in calls))
@@ -1108,11 +1148,16 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         bot_module = self.bot_module
         ctx = MagicMock()
         ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
         ctx.author.guild_permissions.administrator = True
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
-            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
-                await bot_module.stop.callback(ctx, arg1="now", arg2="server1")
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
+                        await bot_module.stop.callback(ctx, arg1="now", arg2="server1")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("server1" in c and "immediately" in c for c in calls))
@@ -1136,12 +1181,17 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         bot_module = self.bot_module
         ctx = MagicMock()
         ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
         ctx.author.guild_permissions.administrator = False
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
-            with patch("src.bot.permissions.is_member_allowed", return_value=True) as mock_perm:
-                with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
-                    await bot_module.stop.callback(ctx, arg1="now")
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch("src.bot.permissions.is_member_allowed", return_value=True) as mock_perm:
+                        with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
+                            await bot_module.stop.callback(ctx, arg1="now")
 
         mock_perm.assert_called_once_with("stop_now", ctx.author)
         calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -1152,6 +1202,9 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         bot_module = self.bot_module
         ctx = MagicMock()
         ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
         ctx.author.guild_permissions.administrator = True
 
         pending_task = MagicMock()
@@ -1159,8 +1212,10 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         bot_module._pending_ops["server1"] = pending_task
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
-            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
-                await bot_module.stop.callback(ctx, arg1="now")
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
+                        await bot_module.stop.callback(ctx, arg1="now")
 
         pending_task.cancel.assert_called_once()
         self.assertNotIn("server1", bot_module._pending_ops)
@@ -1194,11 +1249,16 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         for variant in ("NOW", "Now", "nOw"):
             ctx = MagicMock()
             ctx.send = AsyncMock()
+            ctx.channel = MagicMock()
+            ctx.channel.id = 100
+            ctx.channel.send = AsyncMock()
             ctx.author.guild_permissions.administrator = True
 
             with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
-                with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
-                    await bot_module.stop.callback(ctx, arg1=variant)
+                with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                    with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                        with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
+                            await bot_module.stop.callback(ctx, arg1=variant)
 
             calls = [c[0][0] for c in ctx.send.call_args_list]
             self.assertTrue(any("immediately" in c for c in calls), f"Failed for variant {variant!r}")
