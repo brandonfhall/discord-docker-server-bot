@@ -103,6 +103,55 @@ def container_status(name: str) -> Optional[str]:
     return c.status
 
 
+def container_logs(name: str, lines: int = 50) -> Optional[str]:
+    """Fetch the last *lines* lines of container logs."""
+    if not _check_allowed(name):
+        return None
+    client = _get_client()
+    c = _find_container_by_name(client, name)
+    if not c:
+        return None
+    try:
+        return c.logs(tail=lines, timestamps=False).decode("utf-8", errors="replace")
+    except Exception as e:
+        logging.error(f"Error fetching logs for {name}: {e}")
+        return None
+
+
+def container_stats(name: str) -> Optional[dict]:
+    """Return a snapshot of CPU and memory usage for a container."""
+    if not _check_allowed(name):
+        return None
+    client = _get_client()
+    c = _find_container_by_name(client, name)
+    if not c:
+        return None
+    c.reload()
+    if c.status != "running":
+        return {"status": c.status}
+    try:
+        raw = c.stats(stream=False)
+        # CPU %
+        cpu_delta = raw["cpu_stats"]["cpu_usage"]["total_usage"] - raw["precpu_stats"]["cpu_usage"]["total_usage"]
+        system_delta = raw["cpu_stats"]["system_cpu_usage"] - raw["precpu_stats"]["system_cpu_usage"]
+        num_cpus = raw["cpu_stats"].get("online_cpus") or len(raw["cpu_stats"]["cpu_usage"].get("percpu_usage", [1]))
+        cpu_percent = (cpu_delta / system_delta) * num_cpus * 100.0 if system_delta > 0 else 0.0
+        # Memory
+        mem_usage = raw["memory_stats"].get("usage", 0)
+        mem_limit = raw["memory_stats"].get("limit", 1)
+        mem_percent = (mem_usage / mem_limit) * 100.0 if mem_limit > 0 else 0.0
+        return {
+            "status": "running",
+            "cpu_percent": round(cpu_percent, 2),
+            "mem_usage_mb": round(mem_usage / (1024 * 1024), 1),
+            "mem_limit_mb": round(mem_limit / (1024 * 1024), 1),
+            "mem_percent": round(mem_percent, 2),
+        }
+    except Exception as e:
+        logging.error(f"Error fetching stats for {name}: {e}")
+        return {"status": "running", "error": str(e)}
+
+
 def _sanitize(msg: str) -> str:
     if not msg:
         return ""

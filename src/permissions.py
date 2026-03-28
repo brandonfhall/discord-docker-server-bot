@@ -7,7 +7,7 @@ from .config import PERMISSIONS_FILE, DEFAULT_ALLOWED_ROLES
 
 # Actions that should always have an entry in the permissions file.
 # When new actions are added, include them here so existing installs get backfilled.
-_EXPECTED_ACTIONS = {"start", "stop", "stop_now", "restart", "announce"}
+_EXPECTED_ACTIONS = {"start", "stop", "stop_now", "restart", "restart_now", "announce", "logs", "stats", "maintenance", "history"}
 
 
 def _ensure_file():
@@ -18,13 +18,7 @@ def _ensure_file():
 
     if not os.path.exists(PERMISSIONS_FILE):
         logging.info(f"Initializing permissions file at: {os.path.abspath(PERMISSIONS_FILE)}")
-        data = {
-            "start": list(DEFAULT_ALLOWED_ROLES),
-            "stop": list(DEFAULT_ALLOWED_ROLES),
-            "stop_now": list(DEFAULT_ALLOWED_ROLES),
-            "restart": list(DEFAULT_ALLOWED_ROLES),
-            "announce": list(DEFAULT_ALLOWED_ROLES),
-        }
+        data = {action: list(DEFAULT_ALLOWED_ROLES) for action in sorted(_EXPECTED_ACTIONS)}
         with open(PERMISSIONS_FILE, "w", opener=lambda path, flags: __import__('os').open(path, flags, 0o600)) as f:
             json.dump(data, f, indent=2)
 

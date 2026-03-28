@@ -502,7 +502,8 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_valid_actions_constant_complete(self):
         from src import bot as bot_module
-        for action in ("start", "stop", "stop_now", "restart", "announce"):
+        for action in ("start", "stop", "stop_now", "restart", "restart_now", "announce",
+                        "logs", "stats", "maintenance", "history"):
             self.assertIn(action, bot_module.VALID_ACTIONS)
 
     # --- start command ---
@@ -531,6 +532,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     async def test_restart_command_normal_path(self):
         from src import bot as bot_module
         bot_module._pending_ops.clear()
+        bot_module._maintenance_mode = False
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.channel = MagicMock()
@@ -546,7 +548,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="ok")):
                         with patch.object(bot_module.bot, "loop", mock_loop):
-                            await bot_module.restart.callback(ctx, container_name=None)
+                            await bot_module.restart.callback(ctx, arg1=None, arg2=None)
 
         first_msg = ctx.send.call_args_list[0][0][0]
         self.assertIn("will restart", first_msg)
@@ -976,6 +978,7 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
     async def test_restart_rejects_duplicate_when_pending(self):
         """!restart while a task is already pending should send a rejection message."""
         bot_module = self.bot_module
+        bot_module._maintenance_mode = False
         ctx = MagicMock()
         ctx.send = AsyncMock()
 
@@ -984,7 +987,7 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         bot_module._pending_ops["test_container"] = fake_task
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
-            await bot_module.restart.callback(ctx, "test_container")
+            await bot_module.restart.callback(ctx, arg1="test_container", arg2=None)
 
         ctx.send.assert_called_once()
         self.assertIn("already scheduled", ctx.send.call_args[0][0].lower())
@@ -1378,6 +1381,591 @@ class TestCancelPending(unittest.TestCase):
         self.bot_module._cancel_pending("srv")
         mock_task.cancel.assert_not_called()
         self.assertNotIn("srv", self.bot_module._pending_ops)
+
+
+# ---------------------------------------------------------------------------
+# docker_control — container_logs and container_stats
+# ---------------------------------------------------------------------------
+
+class TestDockerControlLogs(unittest.TestCase):
+
+    def setUp(self):
+        docker_control._docker_client = None
+
+    @patch("src.docker_control.docker.from_env")
+    def test_container_logs_returns_output(self, mock_from_env):
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.containers.get.return_value = mock_container
+        mock_container.logs.return_value = b"line1\nline2\nline3\n"
+
+        with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
+            result = docker_control.container_logs("my_game_server", 10)
+        self.assertIn("line1", result)
+        mock_container.logs.assert_called_once_with(tail=10, timestamps=False)
+
+    @patch("src.docker_control.docker.from_env")
+    def test_container_logs_not_allowed(self, mock_from_env):
+        result = docker_control.container_logs("evil_container")
+        self.assertIsNone(result)
+
+    @patch("src.docker_control.docker.from_env")
+    def test_container_logs_exception_returns_none(self, mock_from_env):
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.containers.get.return_value = mock_container
+        mock_container.logs.side_effect = RuntimeError("Docker error")
+
+        with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
+            result = docker_control.container_logs("my_game_server")
+        self.assertIsNone(result)
+
+
+class TestDockerControlStats(unittest.TestCase):
+
+    def setUp(self):
+        docker_control._docker_client = None
+
+    @patch("src.docker_control.docker.from_env")
+    def test_container_stats_running(self, mock_from_env):
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.containers.get.return_value = mock_container
+        mock_container.status = "running"
+        mock_container.stats.return_value = {
+            "cpu_stats": {
+                "cpu_usage": {"total_usage": 200, "percpu_usage": [100, 100]},
+                "system_cpu_usage": 10000,
+                "online_cpus": 2,
+            },
+            "precpu_stats": {
+                "cpu_usage": {"total_usage": 100},
+                "system_cpu_usage": 9000,
+            },
+            "memory_stats": {
+                "usage": 100 * 1024 * 1024,
+                "limit": 1024 * 1024 * 1024,
+            },
+        }
+
+        with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
+            result = docker_control.container_stats("my_game_server")
+        self.assertEqual(result["status"], "running")
+        self.assertIn("cpu_percent", result)
+        self.assertIn("mem_usage_mb", result)
+        self.assertIn("mem_percent", result)
+
+    @patch("src.docker_control.docker.from_env")
+    def test_container_stats_not_running(self, mock_from_env):
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.containers.get.return_value = mock_container
+        mock_container.status = "exited"
+
+        with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
+            result = docker_control.container_stats("my_game_server")
+        self.assertEqual(result, {"status": "exited"})
+
+    @patch("src.docker_control.docker.from_env")
+    def test_container_stats_not_allowed(self, mock_from_env):
+        result = docker_control.container_stats("evil_container")
+        self.assertIsNone(result)
+
+    @patch("src.docker_control.docker.from_env")
+    def test_container_stats_exception(self, mock_from_env):
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.containers.get.return_value = mock_container
+        mock_container.status = "running"
+        mock_container.stats.side_effect = RuntimeError("Stats error")
+
+        with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
+            result = docker_control.container_stats("my_game_server")
+        self.assertEqual(result["status"], "running")
+        self.assertIn("error", result)
+
+
+# ---------------------------------------------------------------------------
+# New config vars
+# ---------------------------------------------------------------------------
+
+class TestNewConfig(unittest.TestCase):
+
+    def test_command_cooldown_has_default(self):
+        from src import config
+        self.assertIsInstance(config.COMMAND_COOLDOWN, int)
+        self.assertGreater(config.COMMAND_COOLDOWN, 0)
+
+    def test_crash_check_interval_has_default(self):
+        from src import config
+        self.assertIsInstance(config.CRASH_CHECK_INTERVAL, int)
+        self.assertGreater(config.CRASH_CHECK_INTERVAL, 0)
+
+    def test_history_file_has_default(self):
+        from src import config
+        self.assertIsInstance(config.HISTORY_FILE, str)
+        self.assertTrue(config.HISTORY_FILE.endswith(".json"))
+
+
+# ---------------------------------------------------------------------------
+# !logs command
+# ---------------------------------------------------------------------------
+
+class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
+
+    async def test_logs_command_returns_output(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="log line 1\nlog line 2")):
+                await bot_module.logs_cmd.callback(ctx, arg1=None, arg2=None)
+        ctx.send.assert_called_once()
+        self.assertIn("log line 1", ctx.send.call_args[0][0])
+
+    async def test_logs_command_with_line_count(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="output")) as mock_rb:
+                await bot_module.logs_cmd.callback(ctx, arg1="10", arg2=None)
+        # Verify the line count was passed through
+        mock_rb.assert_called_once()
+
+    async def test_logs_command_no_output(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=None)):
+                await bot_module.logs_cmd.callback(ctx, arg1=None, arg2=None)
+        self.assertIn("Could not fetch", ctx.send.call_args[0][0])
+
+    async def test_logs_command_empty_output(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="   ")):
+                await bot_module.logs_cmd.callback(ctx, arg1=None, arg2=None)
+        self.assertIn("No recent logs", ctx.send.call_args[0][0])
+
+
+# ---------------------------------------------------------------------------
+# !stats command
+# ---------------------------------------------------------------------------
+
+class TestStatsCommand(unittest.IsolatedAsyncioTestCase):
+
+    async def test_stats_command_running(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        stats_data = {
+            "status": "running",
+            "cpu_percent": 15.5,
+            "mem_usage_mb": 256.0,
+            "mem_limit_mb": 1024.0,
+            "mem_percent": 25.0,
+        }
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=stats_data)):
+                await bot_module.stats_cmd.callback(ctx, container_name=None)
+        output = ctx.send.call_args[0][0]
+        self.assertIn("15.5%", output)
+        self.assertIn("256.0 MB", output)
+
+    async def test_stats_command_not_running(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value={"status": "exited"})):
+                await bot_module.stats_cmd.callback(ctx, container_name=None)
+        self.assertIn("exited", ctx.send.call_args[0][0])
+
+    async def test_stats_command_none(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=None)):
+                await bot_module.stats_cmd.callback(ctx, container_name=None)
+        self.assertIn("Could not fetch", ctx.send.call_args[0][0])
+
+
+# ---------------------------------------------------------------------------
+# !restart now — immediate restart with separate permission
+# ---------------------------------------------------------------------------
+
+class TestRestartNow(unittest.IsolatedAsyncioTestCase):
+
+    def setUp(self):
+        from src import bot as bot_module
+        self.bot_module = bot_module
+        bot_module._pending_ops.clear()
+        bot_module._maintenance_mode = False
+
+    def tearDown(self):
+        for task in list(self.bot_module._pending_ops.values()):
+            if asyncio.isfuture(task) and not task.done():
+                task.cancel()
+        self.bot_module._pending_ops.clear()
+
+    async def test_restart_now_immediate_as_admin(self):
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+        ctx.author.guild_permissions.administrator = True
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="restarted")):
+                        await bot_module.restart.callback(ctx, arg1="now", arg2=None)
+
+        calls = [c[0][0] for c in ctx.send.call_args_list]
+        self.assertTrue(any("immediately" in c for c in calls))
+        self.assertTrue(any("restarted" in c for c in calls))
+
+    async def test_restart_now_denied_without_permission(self):
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.author.guild_permissions.administrator = False
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.permissions.is_member_allowed", return_value=False):
+                await bot_module.restart.callback(ctx, arg1="now", arg2=None)
+
+        ctx.send.assert_called_once()
+        self.assertIn("permission", ctx.send.call_args[0][0].lower())
+
+    async def test_restart_now_cancels_pending_op(self):
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+        ctx.author.guild_permissions.administrator = True
+
+        pending_task = MagicMock()
+        pending_task.done.return_value = False
+        bot_module._pending_ops["server1"] = pending_task
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="restarted")):
+                        await bot_module.restart.callback(ctx, arg1="now", arg2=None)
+
+        pending_task.cancel.assert_called_once()
+
+    async def test_restart_now_with_container_name(self):
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+        ctx.author.guild_permissions.administrator = True
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="restarted")):
+                        await bot_module.restart.callback(ctx, arg1="server1", arg2="now")
+
+        calls = [c[0][0] for c in ctx.send.call_args_list]
+        self.assertTrue(any("server1" in c and "immediately" in c for c in calls))
+
+
+# ---------------------------------------------------------------------------
+# Maintenance mode
+# ---------------------------------------------------------------------------
+
+class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
+
+    def setUp(self):
+        from src import bot as bot_module
+        self.bot_module = bot_module
+        bot_module._maintenance_mode = False
+        bot_module._maintenance_reason = ""
+
+    def tearDown(self):
+        self.bot_module._maintenance_mode = False
+        self.bot_module._maintenance_reason = ""
+
+    async def test_maintenance_on(self):
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+
+        with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+            with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                await bot_module.maintenance_cmd.callback(ctx, toggle="on", reason="Updating server")
+
+        self.assertTrue(bot_module._maintenance_mode)
+        self.assertEqual(bot_module._maintenance_reason, "Updating server")
+        calls = [c[0][0] for c in ctx.send.call_args_list]
+        self.assertTrue(any("enabled" in c.lower() for c in calls))
+
+    async def test_maintenance_off(self):
+        bot_module = self.bot_module
+        bot_module._maintenance_mode = True
+        bot_module._maintenance_reason = "Test"
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+
+        with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+            with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                await bot_module.maintenance_cmd.callback(ctx, toggle="off", reason="")
+
+        self.assertFalse(bot_module._maintenance_mode)
+        self.assertEqual(bot_module._maintenance_reason, "")
+
+    async def test_maintenance_status(self):
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        await bot_module.maintenance_cmd.callback(ctx, toggle=None, reason="")
+        self.assertIn("OFF", ctx.send.call_args[0][0])
+
+    async def test_maintenance_blocks_start(self):
+        bot_module = self.bot_module
+        bot_module._maintenance_mode = True
+        bot_module._maintenance_reason = "Scheduled downtime"
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.command = MagicMock()
+        ctx.command.qualified_name = "start"
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            await bot_module.start.callback(ctx, container_name=None)
+        self.assertIn("maintenance", ctx.send.call_args[0][0].lower())
+
+    async def test_maintenance_invalid_toggle(self):
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        await bot_module.maintenance_cmd.callback(ctx, toggle="maybe", reason="")
+        self.assertIn("Usage", ctx.send.call_args[0][0])
+
+    def test_check_maintenance_allows_admin_commands(self):
+        bot_module = self.bot_module
+        bot_module._maintenance_mode = True
+        ctx = MagicMock()
+        ctx.command = MagicMock()
+        for cmd_name in ("maintenance", "perm", "guide", "history"):
+            ctx.command.qualified_name = cmd_name
+            self.assertFalse(bot_module._check_maintenance(ctx))
+
+    def test_check_maintenance_blocks_control_commands(self):
+        bot_module = self.bot_module
+        bot_module._maintenance_mode = True
+        ctx = MagicMock()
+        ctx.command = MagicMock()
+        ctx.command.qualified_name = "start"
+        self.assertTrue(bot_module._check_maintenance(ctx))
+
+
+# ---------------------------------------------------------------------------
+# Command history
+# ---------------------------------------------------------------------------
+
+class TestCommandHistory(unittest.TestCase):
+
+    def setUp(self):
+        from src import bot as bot_module
+        self.bot_module = bot_module
+        self.test_file = "test_history.json"
+        self.original_file = bot_module.HISTORY_FILE
+        bot_module.HISTORY_FILE = self.test_file
+
+    def tearDown(self):
+        self.bot_module.HISTORY_FILE = self.original_file
+        if os.path.exists(self.test_file):
+            os.remove(self.test_file)
+
+    def test_record_and_load_history(self):
+        bot_module = self.bot_module
+        bot_module._record_history("TestUser", "start", "server1")
+        entries = bot_module._load_history()
+        self.assertEqual(len(entries), 1)
+        self.assertEqual(entries[0]["user"], "TestUser")
+        self.assertEqual(entries[0]["command"], "start")
+        self.assertEqual(entries[0]["container"], "server1")
+
+    def test_history_caps_at_200(self):
+        bot_module = self.bot_module
+        for i in range(210):
+            bot_module._record_history(f"User{i}", "start", "server1")
+        entries = bot_module._load_history()
+        self.assertEqual(len(entries), 200)
+
+    def test_load_history_empty_file(self):
+        bot_module = self.bot_module
+        entries = bot_module._load_history()
+        self.assertEqual(entries, [])
+
+    def test_load_history_corrupted_file(self):
+        bot_module = self.bot_module
+        with open(self.test_file, "w") as f:
+            f.write("not json{{{")
+        entries = bot_module._load_history()
+        self.assertEqual(entries, [])
+
+
+class TestHistoryCommand(unittest.IsolatedAsyncioTestCase):
+
+    def setUp(self):
+        from src import bot as bot_module
+        self.bot_module = bot_module
+
+    async def test_history_command_empty(self):
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "_load_history", return_value=[]):
+            await bot_module.history_cmd.callback(ctx, count=10)
+        self.assertIn("No command history", ctx.send.call_args[0][0])
+
+    async def test_history_command_with_entries(self):
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        entries = [
+            {"timestamp": "2026-01-01T00:00:00+00:00", "user": "TestUser", "command": "start", "container": "server1"},
+        ]
+        with patch.object(bot_module, "_load_history", return_value=entries):
+            await bot_module.history_cmd.callback(ctx, count=10)
+        output = ctx.send.call_args[0][0]
+        self.assertIn("TestUser", output)
+        self.assertIn("start", output)
+
+
+# ---------------------------------------------------------------------------
+# Command cooldowns (on_command_error handling)
+# ---------------------------------------------------------------------------
+
+class TestCooldownError(unittest.IsolatedAsyncioTestCase):
+
+    async def test_cooldown_error_sends_message(self):
+        from src import bot as bot_module
+        from discord.ext import commands
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel.id = 100
+        error = commands.CommandOnCooldown(commands.Cooldown(1, 5), 3.5, commands.BucketType.user)
+        with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
+            await bot_module.on_command_error(ctx, error)
+        self.assertIn("cooldown", ctx.send.call_args[0][0].lower())
+
+
+# ---------------------------------------------------------------------------
+# Crash alerting
+# ---------------------------------------------------------------------------
+
+class TestCrashAlerting(unittest.IsolatedAsyncioTestCase):
+
+    def setUp(self):
+        from src import bot as bot_module
+        self.bot_module = bot_module
+        bot_module._last_known_status.clear()
+
+    def tearDown(self):
+        self.bot_module._last_known_status.clear()
+
+    async def test_crash_detected_sends_alert(self):
+        bot_module = self.bot_module
+        bot_module._last_known_status["server1"] = "running"
+
+        mock_channel = MagicMock()
+        mock_channel.send = AsyncMock()
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch.object(bot_module, "CRASH_ALERT_CHANNEL_ID", 123):
+                with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="exited")):
+                        with patch.object(bot_module.bot, "get_channel", return_value=mock_channel):
+                            await bot_module.crash_check_loop.coro()
+
+        mock_channel.send.assert_called_once()
+        self.assertIn("Crash Alert", mock_channel.send.call_args[0][0])
+        self.assertEqual(bot_module._last_known_status["server1"], "exited")
+
+    async def test_no_alert_when_still_running(self):
+        bot_module = self.bot_module
+        bot_module._last_known_status["server1"] = "running"
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="running")):
+                await bot_module.crash_check_loop.coro()
+
+        self.assertEqual(bot_module._last_known_status["server1"], "running")
+
+    async def test_no_alert_on_first_check(self):
+        """First poll seeds status without alerting."""
+        bot_module = self.bot_module
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="exited")):
+                await bot_module.crash_check_loop.coro()
+
+        # No alert because previous status was None (first check)
+        self.assertEqual(bot_module._last_known_status["server1"], "exited")
+
+    async def test_crash_alert_uses_announce_channel_fallback(self):
+        bot_module = self.bot_module
+        bot_module._last_known_status["server1"] = "running"
+
+        mock_channel = MagicMock()
+        mock_channel.send = AsyncMock()
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch.object(bot_module, "CRASH_ALERT_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 456):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="exited")):
+                        with patch.object(bot_module.bot, "get_channel", return_value=mock_channel) as mock_get:
+                            await bot_module.crash_check_loop.coro()
+
+        mock_get.assert_called_with(456)
+        mock_channel.send.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# Guide command — updated content
+# ---------------------------------------------------------------------------
+
+class TestGuideUpdated(unittest.IsolatedAsyncioTestCase):
+
+    async def test_guide_shows_new_commands(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        await bot_module.guide.callback(ctx)
+        output = ctx.send.call_args[0][0]
+        self.assertIn("!logs", output)
+        self.assertIn("!stats", output)
+        self.assertIn("!history", output)
+        self.assertIn("!maintenance", output)
+        self.assertIn("!restart now", output)
 
 
 if __name__ == "__main__":

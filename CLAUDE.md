@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A Dockerized Discord bot that controls one or more Docker containers (e.g., a game server) via `!` prefix commands. Users with the right Discord roles can start, stop, restart, and send announcements to containers. A FastAPI HTTP endpoint exposes container status and recent logs.
+A Dockerized Discord bot that controls one or more Docker containers (e.g., a game server) via `!` prefix commands. Users with the right Discord roles can start, stop, restart, view logs/stats, and send announcements to containers. Includes crash alerting, maintenance mode, command history/audit, and per-user cooldowns. A FastAPI HTTP endpoint exposes container status and recent logs.
 
 ## Stack
 
@@ -79,7 +79,30 @@ No Docker daemon is required — all Docker calls are mocked.
 
 ### Pending ops deduplication
 
-- `_pending_ops` (dict in `bot.py`) tracks in-flight `stop`/`restart` tasks per container. Duplicate commands while a task is pending are rejected with a user-facing message. A `Future` placeholder is registered *before* any `await` to prevent race conditions. `!stop now` cancels any pending countdown for that container before issuing the immediate stop.
+- `_pending_ops` (dict in `bot.py`) tracks in-flight `stop`/`restart` tasks per container. Duplicate commands while a task is pending are rejected with a user-facing message. A `Future` placeholder is registered *before* any `await` to prevent race conditions. `!stop now` and `!restart now` cancel any pending countdown for that container before issuing the immediate operation.
+
+### Crash alerting
+
+- A `discord.ext.tasks` loop (`crash_check_loop`) polls container statuses every `CRASH_CHECK_INTERVAL` seconds.
+- On startup, it seeds `_last_known_status` so it doesn't false-alert.
+- When a container transitions from `running` to any other state, an alert is posted to `CRASH_ALERT_CHANNEL_ID` (or `ANNOUNCE_CHANNEL_ID` as fallback).
+
+### Maintenance mode
+
+- `_maintenance_mode` (bool in `bot.py`) gates all container-control commands.
+- Admin/utility commands (`maintenance`, `perm`, `guide`, `history`) remain available during maintenance.
+- Toggled via `!maintenance on [reason]` / `!maintenance off`.
+
+### Command history
+
+- All permissioned commands are recorded to `HISTORY_FILE` (JSON) via `_record_history()`.
+- Capped at 200 entries to prevent unbounded growth.
+- Viewable via `!history [count]`.
+
+### Command cooldowns
+
+- Per-user cooldowns via `@commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)`.
+- `CommandOnCooldown` errors are handled in `on_command_error` with a user-friendly message.
 
 ### Permissions
 
