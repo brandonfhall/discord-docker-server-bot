@@ -306,7 +306,7 @@ class TestPermissions(unittest.TestCase):
         if os.path.exists(self.test_file):
             os.remove(self.test_file)
         data = permissions.list_permissions()
-        for action in ("start", "stop", "stop_now", "restart", "announce"):
+        for action in ("start", "stop", "stop_now", "restart", "restart_now", "announce", "logs", "stats", "maintenance", "history"):
             self.assertIn(action, data)
 
     def test_load_backfills_missing_actions(self):
@@ -952,6 +952,7 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         from src import bot as bot_module
         self.bot_module = bot_module
         bot_module._pending_ops.clear()
+        bot_module._maintenance_mode = False
 
     def tearDown(self):
         for task in list(self.bot_module._pending_ops.values()):
@@ -1070,6 +1071,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         from src import bot as bot_module
         self.bot_module = bot_module
         bot_module._pending_ops.clear()
+        bot_module._maintenance_mode = False
 
     def tearDown(self):
         for task in list(self.bot_module._pending_ops.values()):
@@ -1518,6 +1520,21 @@ class TestNewConfig(unittest.TestCase):
 
 class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
 
+    def setUp(self):
+        from src import bot as bot_module
+        bot_module._maintenance_mode = False
+
+    async def test_logs_blocked_during_maintenance(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        bot_module._maintenance_mode = True
+        bot_module._maintenance_reason = "update"
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            await bot_module.logs_cmd.callback(ctx, arg1=None, arg2=None)
+        self.assertIn("maintenance", ctx.send.call_args[0][0].lower())
+        bot_module._maintenance_mode = False
+
     async def test_logs_command_returns_output(self):
         from src import bot as bot_module
         ctx = MagicMock()
@@ -1562,6 +1579,30 @@ class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
 # ---------------------------------------------------------------------------
 
 class TestStatsCommand(unittest.IsolatedAsyncioTestCase):
+
+    def setUp(self):
+        from src import bot as bot_module
+        bot_module._maintenance_mode = False
+
+    async def test_stats_blocked_during_maintenance(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        bot_module._maintenance_mode = True
+        bot_module._maintenance_reason = "patching"
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            await bot_module.stats_cmd.callback(ctx, container_name=None)
+        self.assertIn("maintenance", ctx.send.call_args[0][0].lower())
+        bot_module._maintenance_mode = False
+
+    async def test_stats_command_error_field(self):
+        from src import bot as bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value={"status": "running", "error": "timeout"})):
+                await bot_module.stats_cmd.callback(ctx, container_name=None)
+        self.assertIn("Error", ctx.send.call_args[0][0])
 
     async def test_stats_command_running(self):
         from src import bot as bot_module

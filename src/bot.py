@@ -401,11 +401,12 @@ async def stop(ctx, arg1: str = None, arg2: str = None):
         return
 
     logging.info(f"User {ctx.author} requested STOP for container '{target}'")
-    _record_history(ctx.author, "stop", target)
 
     if target in _pending_ops and not _pending_ops[target].done():
         await ctx.send(f"A shutdown or restart is already scheduled for `{target}`. Ignoring duplicate request.")
         return
+
+    _record_history(ctx.author, "stop", target)
 
     # Reserve the slot immediately before any awaits so concurrent duplicate
     # commands see the container as pending even during the countdown sends.
@@ -469,11 +470,12 @@ async def restart(ctx, arg1: str = None, arg2: str = None):
         return
 
     logging.info(f"User {ctx.author} requested RESTART for container '{target}'")
-    _record_history(ctx.author, "restart", target)
 
     if target in _pending_ops and not _pending_ops[target].done():
         await ctx.send(f"A shutdown or restart is already scheduled for `{target}`. Ignoring duplicate request.")
         return
+
+    _record_history(ctx.author, "restart", target)
 
     # Reserve the slot immediately before any awaits so concurrent duplicate
     # commands see the container as pending even during the countdown sends.
@@ -593,6 +595,9 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
         elif arg in ALLOWED_CONTAINERS:
             container_name = arg
 
+    if _check_maintenance(ctx):
+        await ctx.send(f"Bot is in maintenance mode. {_maintenance_reason}")
+        return
     target = await resolve_container(ctx, container_name)
     if not target:
         return
@@ -615,6 +620,9 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def stats_cmd(ctx, container_name: str = None):
     """Show container CPU and memory usage."""
+    if _check_maintenance(ctx):
+        await ctx.send(f"Bot is in maintenance mode. {_maintenance_reason}")
+        return
     target = await resolve_container(ctx, container_name)
     if not target:
         return
