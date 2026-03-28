@@ -1,4 +1,4 @@
-discord.py==2.3.2
+discord.py==2.7.1
 docker==7.1.0
 fastapi==0.135.1
 uvicorn[standard]==0.42.0
