@@ -1,5 +1,6 @@
 """FastAPI HTTP status endpoint for the bot."""
 
+import logging
 import os
 from collections import deque
 
@@ -49,8 +50,9 @@ def status():
                 recent_logs = [line.strip().replace(BOT_TOKEN, "[REDACTED]") for line in recent_logs]
                 if STATUS_TOKEN and STATUS_TOKEN != BOT_TOKEN:
                     recent_logs = [line.replace(STATUS_TOKEN, "[REDACTED]") for line in recent_logs]
-        except Exception as e:
-            recent_logs = [f"Error reading logs: {e}"]
+        except Exception:
+            logging.exception("Error reading logs for status endpoint")
+            recent_logs = ["Error reading logs"]
 
     return {
         "ok": True,
