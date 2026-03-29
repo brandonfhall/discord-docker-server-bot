@@ -2,6 +2,7 @@ import asyncio
 import json
 import logging
 import os
+import threading
 from logging.handlers import RotatingFileHandler
 from datetime import datetime, timezone
 from collections import deque
@@ -21,8 +22,7 @@ from .config import (
 )
 from . import permissions
 
-VALID_ACTIONS = {"start", "stop", "stop_now", "restart", "restart_now", "announce",
-                 "logs", "stats", "maintenance", "history"}
+VALID_ACTIONS = permissions.ALL_ACTIONS
 
 # Tracks in-flight stop/restart tasks per container name so duplicate
 # commands don't stack up and trigger multiple Docker operations.
@@ -46,6 +46,9 @@ def _cancel_pending(container: str):
 # Command history / audit log
 # ---------------------------------------------------------------------------
 
+_history_lock = threading.Lock()
+
+
 def _load_history() -> list:
     if os.path.exists(HISTORY_FILE):
         try:
@@ -67,14 +70,15 @@ def _save_history(entries: list):
 
 
 def _record_history(user: str, command: str, container: str = ""):
-    entries = _load_history()
-    entries.append({
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "user": str(user),
-        "command": command,
-        "container": container,
-    })
-    _save_history(entries)
+    with _history_lock:
+        entries = _load_history()
+        entries.append({
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "user": str(user),
+            "command": command,
+            "container": container,
+        })
+        _save_history(entries)
 
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
 
@@ -426,6 +430,10 @@ async def stop(ctx, arg1: str = None, arg2: str = None):
             await ctx.send(f"Stop result: {result}")
         except Exception as e:
             logging.error(f"Error during scheduled stop of {target}: {e}", exc_info=True)
+            try:
+                await ctx.send(f"Error during scheduled stop of `{target}`: {e}")
+            except Exception:
+                pass
 
     _pending_ops[target] = bot.loop.create_task(do_stop())
 
@@ -495,6 +503,10 @@ async def restart(ctx, arg1: str = None, arg2: str = None):
             await ctx.send(f"Restart result: {result}")
         except Exception as e:
             logging.error(f"Error during scheduled restart of {target}: {e}", exc_info=True)
+            try:
+                await ctx.send(f"Error during scheduled restart of `{target}`: {e}")
+            except Exception:
+                pass
 
     _pending_ops[target] = bot.loop.create_task(do_restart())
 
@@ -653,7 +665,8 @@ async def history_cmd(ctx, count: int = 10):
     """View recent command history. Usage: !history [count]"""
     logging.info(f"User {ctx.author} requested HISTORY")
     count = max(1, min(count, 25))
-    entries = _load_history()
+    with _history_lock:
+        entries = _load_history()
     if not entries:
         await ctx.send("No command history recorded yet.")
         return

@@ -333,9 +333,9 @@ class TestPermissions(unittest.TestCase):
         self.assertEqual(data["stop"], ["Moderator"])
 
     def test_expected_actions_matches_valid_actions(self):
-        """_EXPECTED_ACTIONS in permissions.py must stay in sync with VALID_ACTIONS in bot.py."""
+        """VALID_ACTIONS in bot.py must be the same object as ALL_ACTIONS in permissions.py."""
         from src import bot as bot_module
-        self.assertEqual(permissions._EXPECTED_ACTIONS, bot_module.VALID_ACTIONS)
+        self.assertIs(bot_module.VALID_ACTIONS, permissions.ALL_ACTIONS)
 
 
 # ---------------------------------------------------------------------------
