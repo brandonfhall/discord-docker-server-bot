@@ -270,7 +270,7 @@ async def _delayed_container_op(ctx, arg1, arg2, *, action, now_action, docker_f
         except Exception as e:
             logging.error(f"Error during scheduled {action} of {target}: {e}", exc_info=True)
             try:
-                await ctx.send(f"Error during scheduled {action} of `{target}`: {e}")
+                await ctx.send(f"Error during scheduled {action} of `{target}`. Check the bot logs for details.")
             except Exception:
                 pass
 
