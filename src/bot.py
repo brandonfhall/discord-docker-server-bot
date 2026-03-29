@@ -207,8 +207,8 @@ async def start(ctx, container_name: str = None):
     history.record(HISTORY_FILE,ctx.author, "start", target)
     await ctx.send(f"Starting {target}...")
     res = await docker_control.run_blocking(docker_control.start_container, target)
-    logging.info(f"START result for {ctx.author}: {res}")
-    await ctx.send(res)
+    logging.info(f"START result for {ctx.author}: {res.message}")
+    await ctx.send(res.message)
 
 
 async def _delayed_container_op(ctx, arg1, arg2, *, action, now_action, docker_func,
@@ -241,8 +241,8 @@ async def _delayed_container_op(ctx, arg1, arg2, *, action, now_action, docker_f
         await send_announcement(ctx, immediate_msg)
         await docker_control.run_blocking(docker_control.announce_in_game, target, immediate_msg)
         res = await docker_control.run_blocking(docker_func, target)
-        logging.info(f"Immediate {action.upper()} result for {ctx.author}: {res}")
-        await ctx.send(f"{action.capitalize()} result: {res}")
+        logging.info(f"Immediate {action.upper()} result for {ctx.author}: {res.message}")
+        await ctx.send(f"{action.capitalize()} result: {res.message}")
         return
 
     logging.info(f"User {ctx.author} requested {action.upper()} for container '{target}'")
@@ -264,8 +264,8 @@ async def _delayed_container_op(ctx, arg1, arg2, *, action, now_action, docker_f
         state.pending_ops.pop(target, None)
         try:
             result = await docker_control.run_blocking(docker_func, target)
-            logging.info(f"{action.upper()} execution result for {target}: {result}")
-            await ctx.send(f"{action.capitalize()} result: {result}")
+            logging.info(f"{action.upper()} execution result for {target}: {result.message}")
+            await ctx.send(f"{action.capitalize()} result: {result.message}")
         except Exception as e:
             logging.error(f"Error during scheduled {action} of {target}: {e}", exc_info=True)
             try:
@@ -346,7 +346,7 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
 
     history.record(HISTORY_FILE,ctx.author, "announce", target)
     res = await docker_control.run_blocking(docker_control.announce_in_game, target, message)
-    await ctx.send(f"Sent to {target}: {res}")
+    await ctx.send(f"Sent to {target}: {res.message}")
 
 
 @announce.error

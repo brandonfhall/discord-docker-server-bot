@@ -153,24 +153,34 @@ class TestDockerControl(unittest.TestCase):
         with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
             # start: exited → started
             mock_container.status = "exited"
-            self.assertEqual(docker_control.start_container("my_game_server"), "started")
+            result = docker_control.start_container("my_game_server")
+            self.assertTrue(result.success)
+            self.assertEqual(result.message, "started")
             mock_container.start.assert_called_once()
 
             # start: already running
             mock_container.status = "running"
-            self.assertEqual(docker_control.start_container("my_game_server"), "already running")
+            result = docker_control.start_container("my_game_server")
+            self.assertFalse(result.success)
+            self.assertEqual(result.message, "already running")
 
             # stop: running → stopped
             mock_container.status = "running"
-            self.assertEqual(docker_control.stop_container("my_game_server"), "stopped")
+            result = docker_control.stop_container("my_game_server")
+            self.assertTrue(result.success)
+            self.assertEqual(result.message, "stopped")
             mock_container.stop.assert_called_once()
 
             # stop: already stopped
             mock_container.status = "exited"
-            self.assertEqual(docker_control.stop_container("my_game_server"), "not running")
+            result = docker_control.stop_container("my_game_server")
+            self.assertFalse(result.success)
+            self.assertEqual(result.message, "not running")
 
             # restart
-            self.assertEqual(docker_control.restart_container("my_game_server"), "restarted")
+            result = docker_control.restart_container("my_game_server")
+            self.assertTrue(result.success)
+            self.assertEqual(result.message, "restarted")
             mock_container.restart.assert_called_once()
 
             # status
@@ -183,11 +193,14 @@ class TestDockerControl(unittest.TestCase):
             mock_exec.output = b"Message sent"
             mock_container.exec_run.return_value = mock_exec
             result = docker_control.announce_in_game("my_game_server", "Hello World")
-            self.assertIn("ok", result)
+            self.assertTrue(result.success)
+            self.assertIn("ok", result.message)
             self.assertTrue(mock_container.exec_run.called)
 
     def test_docker_security_checks(self):
-        self.assertIn("not allowed", docker_control.start_container("evil_container"))
+        result = docker_control.start_container("evil_container")
+        self.assertFalse(result.success)
+        self.assertIn("not allowed", result.message)
 
     @patch("src.docker_control.docker.from_env")
     def test_announce_in_game_no_message_placeholder(self, mock_from_env):
@@ -204,7 +217,8 @@ class TestDockerControl(unittest.TestCase):
         with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
             with patch("src.docker_control.CONTAINER_MESSAGE_CMD", "rcon-cli say"):
                 result = docker_control.announce_in_game("my_game_server", "Hello")
-        self.assertEqual(result, "ok")
+        self.assertTrue(result.success)
+        self.assertEqual(result.message, "ok")
         mock_container.exec_run.assert_called_once_with(["rcon-cli", "say", "Hello"])
 
     @patch("src.docker_control.docker.from_env")
@@ -218,7 +232,8 @@ class TestDockerControl(unittest.TestCase):
 
         with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
             result = docker_control.announce_in_game("my_game_server", "Hello")
-        self.assertTrue(result.startswith("error:"))
+        self.assertFalse(result.success)
+        self.assertTrue(result.message.startswith("error:"))
 
     @patch("src.docker_control.docker.from_env")
     def test_announce_in_game_nonzero_exit_code(self, mock_from_env):
@@ -234,7 +249,8 @@ class TestDockerControl(unittest.TestCase):
 
         with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
             result = docker_control.announce_in_game("my_game_server", "Hello")
-        self.assertTrue(result.startswith("error (1):"))
+        self.assertFalse(result.success)
+        self.assertTrue(result.message.startswith("error (1):"))
 
 
 # ---------------------------------------------------------------------------
@@ -515,7 +531,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
-            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="started")):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "started"))):
                 await bot_module.start.callback(ctx, container_name=None)
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("Starting" in c for c in calls))
@@ -548,7 +564,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="ok")):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))):
                         with patch.object(bot_module.bot, "loop", mock_loop):
                             await bot_module.restart.callback(ctx, arg1=None, arg2=None)
 
@@ -576,7 +592,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
-            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="ok: Message sent")):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok: Message sent"))):
                 await bot_module.announce.callback(ctx, arg1="Hello world", arg2=None)
         ctx.send.assert_called_once()
         self.assertIn("ok", ctx.send.call_args[0][0])
@@ -586,7 +602,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
-            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="ok")):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))):
                 await bot_module.announce.callback(ctx, arg1="server1", arg2="Hello world")
         ctx.send.assert_called_once()
         self.assertIn("server1", ctx.send.call_args[0][0])
@@ -1017,7 +1033,7 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="ok")):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))):
                         with patch.object(bot_module.bot, "loop", mock_loop):
                             await bot_module.stop.callback(ctx, arg1="test_container")
 
@@ -1053,7 +1069,7 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="ok")):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))):
                         with patch.object(bot_module.bot, "loop", mock_loop):
                             await bot_module.stop.callback(ctx1, arg1="test_container")
                             await bot_module.stop.callback(ctx2, arg1="test_container")
@@ -1094,7 +1110,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
                         await bot_module.stop.callback(ctx, arg1="now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -1114,7 +1130,9 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         run_blocking_calls = []
         async def mock_run_blocking(func, *args, **kwargs):
             run_blocking_calls.append((func.__name__, args))
-            return "stopped" if func.__name__ == "stop_container" else "ok"
+            if func.__name__ == "stop_container":
+                return docker_control.Result(True, "stopped")
+            return docker_control.Result(True, "ok")
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
@@ -1144,7 +1162,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
                         await bot_module.stop.callback(ctx, arg1="server1", arg2="now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -1163,7 +1181,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
                         await bot_module.stop.callback(ctx, arg1="now", arg2="server1")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -1197,7 +1215,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.permissions.is_member_allowed", return_value=True) as mock_perm:
-                        with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
+                        with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
                             await bot_module.stop.callback(ctx, arg1="now")
 
         mock_perm.assert_called_once_with("stop_now", ctx.author)
@@ -1221,7 +1239,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
                         await bot_module.stop.callback(ctx, arg1="now")
 
         pending_task.cancel.assert_called_once()
@@ -1243,7 +1261,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="ok")):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))):
                         with patch.object(bot_module.bot, "loop", mock_loop):
                             await bot_module.stop.callback(ctx, arg1=None)
 
@@ -1264,7 +1282,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
             with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
                 with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                     with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                        with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="stopped")):
+                        with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
                             await bot_module.stop.callback(ctx, arg1=variant)
 
             calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -1671,7 +1689,7 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="restarted")):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "restarted"))):
                         await bot_module.restart.callback(ctx, arg1="now", arg2=None)
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -1707,7 +1725,7 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="restarted")):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "restarted"))):
                         await bot_module.restart.callback(ctx, arg1="now", arg2=None)
 
         pending_task.cancel.assert_called_once()
@@ -1724,7 +1742,7 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="restarted")):
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "restarted"))):
                         await bot_module.restart.callback(ctx, arg1="server1", arg2="now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
