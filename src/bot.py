@@ -1,174 +1,25 @@
 import asyncio
-import json
 import logging
 import os
-import threading
-from logging.handlers import RotatingFileHandler
-from datetime import datetime, timezone
-from collections import deque
 
-import uvicorn
-from fastapi import FastAPI, Header, HTTPException, Depends, Query
-from fastapi.responses import RedirectResponse
 import discord
 from discord.ext import commands, tasks
 
-from . import docker_control
+from . import docker_control, history, permissions
+from .api import start_api
 from .config import (
-    BOT_TOKEN, STATUS_TOKEN, STATUS_PORT, SHUTDOWN_DELAY, ALLOWED_CONTAINERS,
+    BOT_TOKEN, STATUS_TOKEN, SHUTDOWN_DELAY, ALLOWED_CONTAINERS,
     DISCORD_GUILD_ID, LOG_FILE, ANNOUNCE_CHANNEL_ID, ANNOUNCE_ROLE_ID,
     ALLOWED_CHANNEL_IDS, COMMAND_COOLDOWN, CRASH_CHECK_INTERVAL,
     CRASH_ALERT_CHANNEL_ID, HISTORY_FILE
 )
-from . import permissions
+from .logging_config import setup_logging
+from .state import state
 
 VALID_ACTIONS = permissions.ALL_ACTIONS
 
-# Tracks in-flight stop/restart tasks per container name so duplicate
-# commands don't stack up and trigger multiple Docker operations.
-_pending_ops: dict = {}
 
-# Maintenance mode: when True, all container-control commands are blocked.
-_maintenance_mode = False
-_maintenance_reason = ""
-
-# Crash alerting: tracks last-known container status for change detection.
-_last_known_status: dict = {}
-
-
-def _cancel_pending(container: str):
-    task = _pending_ops.pop(container, None)
-    if task and not task.done():
-        task.cancel()
-
-
-# ---------------------------------------------------------------------------
-# Command history / audit log
-# ---------------------------------------------------------------------------
-
-_history_lock = threading.Lock()
-
-
-def _load_history() -> list:
-    if os.path.exists(HISTORY_FILE):
-        try:
-            with open(HISTORY_FILE, "r") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, OSError):
-            return []
-    return []
-
-
-def _save_history(entries: list):
-    hist_dir = os.path.dirname(HISTORY_FILE)
-    if hist_dir and not os.path.exists(hist_dir):
-        os.makedirs(hist_dir)
-    # Keep only last 200 entries
-    entries = entries[-200:]
-    with open(HISTORY_FILE, "w") as f:
-        json.dump(entries, f, indent=2)
-
-
-def _record_history(user: str, command: str, container: str = ""):
-    with _history_lock:
-        entries = _load_history()
-        entries.append({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "user": str(user),
-            "command": command,
-            "container": container,
-        })
-        _save_history(entries)
-
-LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
-
-# Ensure log directory exists
-log_dir = os.path.dirname(LOG_FILE)
-if log_dir and not os.path.exists(log_dir):
-    os.makedirs(log_dir)
-
-class _RedactingFilter(logging.Filter):
-    """Strips sensitive token values from log records before they reach any handler."""
-    def __init__(self, tokens):
-        super().__init__()
-        self._tokens = [t for t in tokens if t]
-
-    def filter(self, record):
-        if self._tokens:
-            msg = record.getMessage()
-            for token in self._tokens:
-                msg = msg.replace(token, "[REDACTED]")
-            record.msg = msg
-            record.args = ()
-        return True
-
-
-logging.basicConfig(
-    level=LOG_LEVEL,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        # Rotate logs: Max 5MB, keep 1 backup.
-        # This prevents the log file from growing indefinitely and crashing the status reader.
-        RotatingFileHandler(LOG_FILE, maxBytes=5*1024*1024, backupCount=1)
-    ]
-)
-
-# Attach the redacting filter to every handler so tokens never appear on disk or stdout.
-_redact_filter = _RedactingFilter([BOT_TOKEN, STATUS_TOKEN])
-for _handler in logging.root.handlers:
-    _handler.addFilter(_redact_filter)
-
-app = FastAPI()
-
-
-async def verify_token(
-    x_auth_token: str = Header(None, alias="X-Auth-Token"),
-    query_token: str = Query(None, alias="token")
-):
-    # If STATUS_TOKEN is empty (user explicitly disabled it), allow access
-    if not STATUS_TOKEN:
-        return
-
-    token = x_auth_token or query_token
-    if not token or token != STATUS_TOKEN:
-        raise HTTPException(status_code=401, detail="Unauthorized")
-
-
-@app.get("/")
-def root():
-    return RedirectResponse(url="/status")
-
-
-@app.get("/status", dependencies=[Depends(verify_token)])
-def status():
-    out = {}
-    for name in ALLOWED_CONTAINERS:
-        out[name] = docker_control.container_status(name)
-
-    # Get current permissions
-    current_perms = permissions.list_permissions()
-
-    # Get recent logs (last 50 lines)
-    recent_logs = []
-    if os.path.exists(LOG_FILE):
-        try:
-            with open(LOG_FILE, "r", encoding="utf-8", errors="replace") as f:
-                recent_logs = list(deque(f, maxlen=50))
-                # Redact tokens
-                recent_logs = [line.strip().replace(BOT_TOKEN, "[REDACTED]") for line in recent_logs]
-                if STATUS_TOKEN and STATUS_TOKEN != BOT_TOKEN:
-                    recent_logs = [line.replace(STATUS_TOKEN, "[REDACTED]") for line in recent_logs]
-        except Exception as e:
-            recent_logs = [f"Error reading logs: {e}"]
-
-    return {
-        "ok": True,
-        "containers": out,
-        "permissions": current_perms,
-        "logs": recent_logs
-    }
-
+setup_logging(LOG_FILE, os.getenv("LOG_LEVEL", "INFO"), [BOT_TOKEN, STATUS_TOKEN])
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -307,14 +158,14 @@ async def on_command_error(ctx, error):
 @tasks.loop(seconds=CRASH_CHECK_INTERVAL)
 async def crash_check_loop():
     """Polls container statuses and alerts if one unexpectedly stops."""
-    global _last_known_status
+    # state.last_known_status is populated here on first run
     for name in ALLOWED_CONTAINERS:
         try:
             current = await docker_control.run_blocking(docker_control.container_status, name)
         except Exception:
             continue
-        prev = _last_known_status.get(name)
-        _last_known_status[name] = current
+        prev = state.last_known_status.get(name)
+        state.last_known_status[name] = current
         # Alert when a container transitions from running to non-running
         if prev == "running" and current and current != "running":
             logging.warning(f"Crash alert: container '{name}' changed from running to {current}")
@@ -334,17 +185,11 @@ async def _before_crash_check():
     # Seed initial statuses so we don't false-alert on startup
     for name in ALLOWED_CONTAINERS:
         try:
-            _last_known_status[name] = await docker_control.run_blocking(docker_control.container_status, name)
+            state.last_known_status[name] = await docker_control.run_blocking(docker_control.container_status, name)
         except Exception:
             pass
 
 
-def _check_maintenance(ctx) -> bool:
-    """Return True if maintenance mode is active (and the command should be blocked)."""
-    # Admin-only commands (perm, maintenance) are not blocked
-    if ctx.command and ctx.command.qualified_name in ("maintenance", "perm", "perm add", "perm remove", "perm list", "guide", "history"):
-        return False
-    return _maintenance_mode
 
 
 @bot.command()
@@ -352,14 +197,14 @@ def _check_maintenance(ctx) -> bool:
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def start(ctx, container_name: str = None):
     """Starts the container."""
-    if _check_maintenance(ctx):
-        await ctx.send(f"Bot is in maintenance mode. {_maintenance_reason}")
+    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
+        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
         return
     target = await resolve_container(ctx, container_name)
     if not target:
         return
     logging.info(f"User {ctx.author} requested START for container '{target}'")
-    _record_history(ctx.author, "start", target)
+    history.record(HISTORY_FILE,ctx.author, "start", target)
     await ctx.send(f"Starting {target}...")
     res = await docker_control.run_blocking(docker_control.start_container, target)
     logging.info(f"START result for {ctx.author}: {res}")
@@ -371,8 +216,8 @@ async def start(ctx, container_name: str = None):
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def stop(ctx, arg1: str = None, arg2: str = None):
     """Stops the container. Use '!stop now' for immediate shutdown (requires stop_now permission)."""
-    if _check_maintenance(ctx):
-        await ctx.send(f"Bot is in maintenance mode. {_maintenance_reason}")
+    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
+        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
         return
     # Parse arguments: either could be the "now" flag or a container name
     now = False
@@ -393,8 +238,8 @@ async def stop(ctx, arg1: str = None, arg2: str = None):
             return
 
         logging.info(f"User {ctx.author} requested immediate STOP for container '{target}'")
-        _record_history(ctx.author, "stop now", target)
-        _cancel_pending(target)
+        history.record(HISTORY_FILE,ctx.author, "stop now", target)
+        state.cancel_pending(target)
         await ctx.send(f"Stopping {target} immediately...")
         msg = "Server is shutting down NOW. Please disconnect immediately."
         await send_announcement(ctx, msg)
@@ -406,15 +251,15 @@ async def stop(ctx, arg1: str = None, arg2: str = None):
 
     logging.info(f"User {ctx.author} requested STOP for container '{target}'")
 
-    if target in _pending_ops and not _pending_ops[target].done():
+    if target in state.pending_ops and not state.pending_ops[target].done():
         await ctx.send(f"A shutdown or restart is already scheduled for `{target}`. Ignoring duplicate request.")
         return
 
-    _record_history(ctx.author, "stop", target)
+    history.record(HISTORY_FILE,ctx.author, "stop", target)
 
     # Reserve the slot immediately before any awaits so concurrent duplicate
     # commands see the container as pending even during the countdown sends.
-    _pending_ops[target] = bot.loop.create_future()
+    state.pending_ops[target] = bot.loop.create_future()
 
     await ctx.send(f"Server {target} will stop in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     msg = f"Server will shut down in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
@@ -423,7 +268,7 @@ async def stop(ctx, arg1: str = None, arg2: str = None):
 
     async def do_stop():
         await asyncio.sleep(SHUTDOWN_DELAY)
-        _pending_ops.pop(target, None)
+        state.pending_ops.pop(target, None)
         try:
             result = await docker_control.run_blocking(docker_control.stop_container, target)
             logging.info(f"STOP execution result for {target}: {result}")
@@ -435,7 +280,7 @@ async def stop(ctx, arg1: str = None, arg2: str = None):
             except Exception:
                 pass
 
-    _pending_ops[target] = bot.loop.create_task(do_stop())
+    state.pending_ops[target] = bot.loop.create_task(do_stop())
 
 
 @bot.command()
@@ -443,8 +288,8 @@ async def stop(ctx, arg1: str = None, arg2: str = None):
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def restart(ctx, arg1: str = None, arg2: str = None):
     """Restarts the container (with countdown). Use '!restart now' for immediate restart (requires restart_now permission)."""
-    if _check_maintenance(ctx):
-        await ctx.send(f"Bot is in maintenance mode. {_maintenance_reason}")
+    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
+        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
         return
 
     # Parse arguments: either could be the "now" flag or a container name
@@ -466,8 +311,8 @@ async def restart(ctx, arg1: str = None, arg2: str = None):
             return
 
         logging.info(f"User {ctx.author} requested immediate RESTART for container '{target}'")
-        _record_history(ctx.author, "restart now", target)
-        _cancel_pending(target)
+        history.record(HISTORY_FILE,ctx.author, "restart now", target)
+        state.cancel_pending(target)
         await ctx.send(f"Restarting {target} immediately...")
         msg = "Server is restarting NOW. Please disconnect immediately."
         await send_announcement(ctx, msg)
@@ -479,15 +324,15 @@ async def restart(ctx, arg1: str = None, arg2: str = None):
 
     logging.info(f"User {ctx.author} requested RESTART for container '{target}'")
 
-    if target in _pending_ops and not _pending_ops[target].done():
+    if target in state.pending_ops and not state.pending_ops[target].done():
         await ctx.send(f"A shutdown or restart is already scheduled for `{target}`. Ignoring duplicate request.")
         return
 
-    _record_history(ctx.author, "restart", target)
+    history.record(HISTORY_FILE,ctx.author, "restart", target)
 
     # Reserve the slot immediately before any awaits so concurrent duplicate
     # commands see the container as pending even during the countdown sends.
-    _pending_ops[target] = bot.loop.create_future()
+    state.pending_ops[target] = bot.loop.create_future()
 
     await ctx.send(f"Server {target} will restart in {SHUTDOWN_DELAY//60} minutes (countdown started).")
     msg = f"Server will restart in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
@@ -496,7 +341,7 @@ async def restart(ctx, arg1: str = None, arg2: str = None):
 
     async def do_restart():
         await asyncio.sleep(SHUTDOWN_DELAY)
-        _pending_ops.pop(target, None)
+        state.pending_ops.pop(target, None)
         try:
             result = await docker_control.run_blocking(docker_control.restart_container, target)
             logging.info(f"RESTART execution result for {target}: {result}")
@@ -508,7 +353,7 @@ async def restart(ctx, arg1: str = None, arg2: str = None):
             except Exception:
                 pass
 
-    _pending_ops[target] = bot.loop.create_task(do_restart())
+    state.pending_ops[target] = bot.loop.create_task(do_restart())
 
 
 @bot.command(name="status")
@@ -532,8 +377,8 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
     Usage: !announce <message> (if single container)
            !announce <container_name> <message> (if multiple)
     """
-    if _check_maintenance(ctx):
-        await ctx.send(f"Bot is in maintenance mode. {_maintenance_reason}")
+    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
+        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
         return
     target = None
     message = None
@@ -549,7 +394,7 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
         await ctx.send(f"Usage: `!announce <container_name> <message>`\nAvailable: {', '.join(ALLOWED_CONTAINERS)}")
         return
 
-    _record_history(ctx.author, "announce", target)
+    history.record(HISTORY_FILE,ctx.author, "announce", target)
     res = await docker_control.run_blocking(docker_control.announce_in_game, target, message)
     await ctx.send(f"Sent to {target}: {res}")
 
@@ -607,14 +452,14 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
         elif arg in ALLOWED_CONTAINERS:
             container_name = arg
 
-    if _check_maintenance(ctx):
-        await ctx.send(f"Bot is in maintenance mode. {_maintenance_reason}")
+    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
+        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
         return
     target = await resolve_container(ctx, container_name)
     if not target:
         return
     logging.info(f"User {ctx.author} requested LOGS for container '{target}' ({lines} lines)")
-    _record_history(ctx.author, f"logs {lines}", target)
+    history.record(HISTORY_FILE,ctx.author, f"logs {lines}", target)
     result = await docker_control.run_blocking(docker_control.container_logs, target, lines)
     if result is None:
         await ctx.send(f"Could not fetch logs for {target}.")
@@ -632,14 +477,14 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def stats_cmd(ctx, container_name: str = None):
     """Show container CPU and memory usage."""
-    if _check_maintenance(ctx):
-        await ctx.send(f"Bot is in maintenance mode. {_maintenance_reason}")
+    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
+        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
         return
     target = await resolve_container(ctx, container_name)
     if not target:
         return
     logging.info(f"User {ctx.author} requested STATS for container '{target}'")
-    _record_history(ctx.author, "stats", target)
+    history.record(HISTORY_FILE,ctx.author, "stats", target)
     data = await docker_control.run_blocking(docker_control.container_stats, target)
     if data is None:
         await ctx.send(f"Could not fetch stats for {target}.")
@@ -665,8 +510,7 @@ async def history_cmd(ctx, count: int = 10):
     """View recent command history. Usage: !history [count]"""
     logging.info(f"User {ctx.author} requested HISTORY")
     count = max(1, min(count, 25))
-    with _history_lock:
-        entries = _load_history()
+    entries = history.load(HISTORY_FILE)
     if not entries:
         await ctx.send("No command history recorded yet.")
         return
@@ -691,24 +535,23 @@ async def history_cmd(ctx, count: int = 10):
 @has_permission("maintenance")
 async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
     """Toggle maintenance mode. Usage: !maintenance on/off [reason]"""
-    global _maintenance_mode, _maintenance_reason
     if toggle is None:
-        state = "ON" if _maintenance_mode else "OFF"
-        await ctx.send(f"Maintenance mode is **{state}**." + (f" Reason: {_maintenance_reason}" if _maintenance_reason else ""))
+        status = "ON" if state.maintenance_mode else "OFF"
+        await ctx.send(f"Maintenance mode is **{status}**." + (f" Reason: {state.maintenance_reason}" if state.maintenance_reason else ""))
         return
     toggle = toggle.lower()
     if toggle == "on":
-        _maintenance_mode = True
-        _maintenance_reason = reason or "No reason given."
-        logging.info(f"User {ctx.author} enabled maintenance mode: {_maintenance_reason}")
-        _record_history(ctx.author, "maintenance on", "")
-        await ctx.send(f"Maintenance mode **enabled**. Reason: {_maintenance_reason}")
-        await send_announcement(ctx, f"**Maintenance mode enabled.** {_maintenance_reason}")
+        state.maintenance_mode = True
+        state.maintenance_reason = reason or "No reason given."
+        logging.info(f"User {ctx.author} enabled maintenance mode: {state.maintenance_reason}")
+        history.record(HISTORY_FILE, ctx.author, "maintenance on", "")
+        await ctx.send(f"Maintenance mode **enabled**. Reason: {state.maintenance_reason}")
+        await send_announcement(ctx, f"**Maintenance mode enabled.** {state.maintenance_reason}")
     elif toggle == "off":
-        _maintenance_mode = False
-        _maintenance_reason = ""
+        state.maintenance_mode = False
+        state.maintenance_reason = ""
         logging.info(f"User {ctx.author} disabled maintenance mode")
-        _record_history(ctx.author, "maintenance off", "")
+        history.record(HISTORY_FILE,ctx.author, "maintenance off", "")
         await ctx.send("Maintenance mode **disabled**. All commands are available again.")
         await send_announcement(ctx, "**Maintenance mode ended.** All commands are available again.")
     else:
@@ -780,12 +623,6 @@ async def perm_error(ctx, error):
         return  # global on_command_error already handles CheckFailure
     else:
         await on_command_error(ctx, error)
-
-
-def start_api():
-    config = uvicorn.Config(app, host="0.0.0.0", port=STATUS_PORT, log_level="warning")
-    server = uvicorn.Server(config)
-    return server.run()
 
 
 def main():

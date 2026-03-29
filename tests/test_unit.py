@@ -12,6 +12,8 @@ import unittest
 from io import StringIO
 from unittest.mock import AsyncMock, MagicMock, patch
 
+from src.state import state
+
 from src import docker_control
 from src import permissions
 
@@ -378,49 +380,49 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     def test_root_redirects_to_status(self):
         from fastapi.testclient import TestClient
-        from src.bot import app
+        from src.api import app
         client = TestClient(app)
         response = client.get("/", follow_redirects=False)
         self.assertEqual(response.status_code, 307)
         self.assertEqual(response.headers["location"], "/status")
 
     async def test_verify_token_no_token_configured(self):
-        from src import bot as bot_module
-        original = bot_module.STATUS_TOKEN
+        from src import api as api_module
+        original = api_module.STATUS_TOKEN
         try:
-            bot_module.STATUS_TOKEN = None
-            await bot_module.verify_token(None, None)  # Should not raise
+            api_module.STATUS_TOKEN = None
+            await api_module.verify_token(None, None)  # Should not raise
         finally:
-            bot_module.STATUS_TOKEN = original
+            api_module.STATUS_TOKEN = original
 
     async def test_verify_token_correct_header(self):
-        from src import bot as bot_module
-        original = bot_module.STATUS_TOKEN
+        from src import api as api_module
+        original = api_module.STATUS_TOKEN
         try:
-            bot_module.STATUS_TOKEN = "secret123"
-            await bot_module.verify_token("secret123", None)
+            api_module.STATUS_TOKEN = "secret123"
+            await api_module.verify_token("secret123", None)
         finally:
-            bot_module.STATUS_TOKEN = original
+            api_module.STATUS_TOKEN = original
 
     async def test_verify_token_correct_query_param(self):
-        from src import bot as bot_module
-        original = bot_module.STATUS_TOKEN
+        from src import api as api_module
+        original = api_module.STATUS_TOKEN
         try:
-            bot_module.STATUS_TOKEN = "secret123"
-            await bot_module.verify_token(None, "secret123")
+            api_module.STATUS_TOKEN = "secret123"
+            await api_module.verify_token(None, "secret123")
         finally:
-            bot_module.STATUS_TOKEN = original
+            api_module.STATUS_TOKEN = original
 
     async def test_verify_token_wrong_token_rejected(self):
-        from src import bot as bot_module
+        from src import api as api_module
         from fastapi import HTTPException
-        original = bot_module.STATUS_TOKEN
+        original = api_module.STATUS_TOKEN
         try:
-            bot_module.STATUS_TOKEN = "secret123"
+            api_module.STATUS_TOKEN = "secret123"
             with self.assertRaises(HTTPException):
-                await bot_module.verify_token("wrongpass", None)
+                await api_module.verify_token("wrongpass", None)
         finally:
-            bot_module.STATUS_TOKEN = original
+            api_module.STATUS_TOKEN = original
 
     async def test_send_announcement_no_config(self):
         from src import bot as bot_module
@@ -531,8 +533,8 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_restart_command_normal_path(self):
         from src import bot as bot_module
-        bot_module._pending_ops.clear()
-        bot_module._maintenance_mode = False
+        state.pending_ops.clear()
+        state.maintenance_mode = False
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.channel = MagicMock()
@@ -552,8 +554,8 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
         first_msg = ctx.send.call_args_list[0][0][0]
         self.assertIn("will restart", first_msg)
-        self.assertIn("server1", bot_module._pending_ops)
-        bot_module._pending_ops.clear()
+        self.assertIn("server1", state.pending_ops)
+        state.pending_ops.clear()
 
     # --- status command ---
 
@@ -888,8 +890,8 @@ class TestRedactingFilter(unittest.TestCase):
     """Tests for the log-level token redaction filter applied at startup."""
 
     def setUp(self):
-        from src.bot import _RedactingFilter
-        self._RedactingFilter = _RedactingFilter
+        from src.logging_config import RedactingFilter
+        self._RedactingFilter = RedactingFilter
 
     def _make_record(self, msg, args=()):
         return logging.LogRecord("test", logging.INFO, "", 0, msg, args, None)
@@ -951,14 +953,14 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         from src import bot as bot_module
         self.bot_module = bot_module
-        bot_module._pending_ops.clear()
-        bot_module._maintenance_mode = False
+        state.pending_ops.clear()
+        state.maintenance_mode = False
 
     def tearDown(self):
-        for task in list(self.bot_module._pending_ops.values()):
+        for task in list(state.pending_ops.values()):
             if asyncio.isfuture(task) and not task.done():
                 task.cancel()
-        self.bot_module._pending_ops.clear()
+        state.pending_ops.clear()
 
     async def test_stop_rejects_duplicate_when_pending(self):
         """!stop while a task is already pending should send a rejection message."""
@@ -968,7 +970,7 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
 
         fake_task = MagicMock()
         fake_task.done.return_value = False
-        bot_module._pending_ops["test_container"] = fake_task
+        state.pending_ops["test_container"] = fake_task
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
             await bot_module.stop.callback(ctx, arg1="test_container")
@@ -979,13 +981,13 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
     async def test_restart_rejects_duplicate_when_pending(self):
         """!restart while a task is already pending should send a rejection message."""
         bot_module = self.bot_module
-        bot_module._maintenance_mode = False
+        state.maintenance_mode = False
         ctx = MagicMock()
         ctx.send = AsyncMock()
 
         fake_task = MagicMock()
         fake_task.done.return_value = False
-        bot_module._pending_ops["test_container"] = fake_task
+        state.pending_ops["test_container"] = fake_task
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
             await bot_module.restart.callback(ctx, arg1="test_container", arg2=None)
@@ -1023,8 +1025,8 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         first_msg = ctx.send.call_args_list[0][0][0]
         self.assertIn("will stop", first_msg)
         # Task registered
-        self.assertIn("test_container", bot_module._pending_ops)
-        self.assertIs(bot_module._pending_ops["test_container"], mock_task)
+        self.assertIn("test_container", state.pending_ops)
+        self.assertIs(state.pending_ops["test_container"], mock_task)
 
     async def test_second_stop_rejected_after_first_registers_task(self):
         """After the first !stop schedules a task, a second !stop is rejected."""
@@ -1070,14 +1072,14 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         from src import bot as bot_module
         self.bot_module = bot_module
-        bot_module._pending_ops.clear()
-        bot_module._maintenance_mode = False
+        state.pending_ops.clear()
+        state.maintenance_mode = False
 
     def tearDown(self):
-        for task in list(self.bot_module._pending_ops.values()):
+        for task in list(state.pending_ops.values()):
             if asyncio.isfuture(task) and not task.done():
                 task.cancel()
-        self.bot_module._pending_ops.clear()
+        state.pending_ops.clear()
 
     async def test_stop_now_immediate_as_admin(self):
         """Admin using !stop now should bypass stop_now permission and stop immediately."""
@@ -1214,7 +1216,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
 
         pending_task = MagicMock()
         pending_task.done.return_value = False
-        bot_module._pending_ops["server1"] = pending_task
+        state.pending_ops["server1"] = pending_task
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
@@ -1223,7 +1225,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
                         await bot_module.stop.callback(ctx, arg1="now")
 
         pending_task.cancel.assert_called_once()
-        self.assertNotIn("server1", bot_module._pending_ops)
+        self.assertNotIn("server1", state.pending_ops)
 
     async def test_stop_without_now_still_uses_countdown(self):
         """Plain !stop should still go through the delayed path."""
@@ -1304,12 +1306,12 @@ class TestStatusEndpoint(unittest.TestCase):
 
     def test_status_returns_expected_structure(self):
         from fastapi.testclient import TestClient
-        from src import bot as bot_module
-        with patch.object(bot_module, "STATUS_TOKEN", None):
-            with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
-                with patch("src.bot.docker_control.container_status", return_value="running"):
-                    with patch("src.bot.permissions.list_permissions", return_value={"start": ["admin"]}):
-                        client = TestClient(bot_module.app)
+        from src import api as api_module
+        with patch.object(api_module, "STATUS_TOKEN", None):
+            with patch.object(api_module, "ALLOWED_CONTAINERS", ["test_container"]):
+                with patch("src.api.docker_control.container_status", return_value="running"):
+                    with patch("src.api.permissions.list_permissions", return_value={"start": ["admin"]}):
+                        client = TestClient(api_module.app)
                         response = client.get("/status")
         self.assertEqual(response.status_code, 200)
         data = response.json()
@@ -1321,31 +1323,31 @@ class TestStatusEndpoint(unittest.TestCase):
 
     def test_status_requires_token_when_configured(self):
         from fastapi.testclient import TestClient
-        from src import bot as bot_module
-        with patch.object(bot_module, "STATUS_TOKEN", "secret"):
-            client = TestClient(bot_module.app)
+        from src import api as api_module
+        with patch.object(api_module, "STATUS_TOKEN", "secret"):
+            client = TestClient(api_module.app)
             response = client.get("/status")
         self.assertEqual(response.status_code, 401)
 
     def test_status_accepts_token_via_header(self):
         from fastapi.testclient import TestClient
-        from src import bot as bot_module
-        with patch.object(bot_module, "STATUS_TOKEN", "secret"):
-            with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
-                with patch("src.bot.docker_control.container_status", return_value="running"):
-                    with patch("src.bot.permissions.list_permissions", return_value={}):
-                        client = TestClient(bot_module.app)
+        from src import api as api_module
+        with patch.object(api_module, "STATUS_TOKEN", "secret"):
+            with patch.object(api_module, "ALLOWED_CONTAINERS", ["test_container"]):
+                with patch("src.api.docker_control.container_status", return_value="running"):
+                    with patch("src.api.permissions.list_permissions", return_value={}):
+                        client = TestClient(api_module.app)
                         response = client.get("/status", headers={"X-Auth-Token": "secret"})
         self.assertEqual(response.status_code, 200)
 
     def test_status_accepts_token_via_query_param(self):
         from fastapi.testclient import TestClient
-        from src import bot as bot_module
-        with patch.object(bot_module, "STATUS_TOKEN", "secret"):
-            with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
-                with patch("src.bot.docker_control.container_status", return_value="running"):
-                    with patch("src.bot.permissions.list_permissions", return_value={}):
-                        client = TestClient(bot_module.app)
+        from src import api as api_module
+        with patch.object(api_module, "STATUS_TOKEN", "secret"):
+            with patch.object(api_module, "ALLOWED_CONTAINERS", ["test_container"]):
+                with patch("src.api.docker_control.container_status", return_value="running"):
+                    with patch("src.api.permissions.list_permissions", return_value={}):
+                        client = TestClient(api_module.app)
                         response = client.get("/status?token=secret")
         self.assertEqual(response.status_code, 200)
 
@@ -1355,34 +1357,32 @@ class TestStatusEndpoint(unittest.TestCase):
 # ---------------------------------------------------------------------------
 
 class TestCancelPending(unittest.TestCase):
-    """Tests for the _cancel_pending helper that aborts scheduled stop/restart tasks."""
+    """Tests for the state.cancel_pending helper that aborts scheduled stop/restart tasks."""
 
     def setUp(self):
-        from src import bot as bot_module
-        self.bot_module = bot_module
-        bot_module._pending_ops.clear()
+        state.pending_ops.clear()
 
     def tearDown(self):
-        self.bot_module._pending_ops.clear()
+        state.pending_ops.clear()
 
     def test_cancels_active_task(self):
         mock_task = MagicMock()
         mock_task.done.return_value = False
-        self.bot_module._pending_ops["srv"] = mock_task
-        self.bot_module._cancel_pending("srv")
+        state.pending_ops["srv"] = mock_task
+        state.cancel_pending("srv")
         mock_task.cancel.assert_called_once()
-        self.assertNotIn("srv", self.bot_module._pending_ops)
+        self.assertNotIn("srv", state.pending_ops)
 
     def test_noop_for_unknown_container(self):
-        self.bot_module._cancel_pending("nonexistent")  # Should not raise
+        state.cancel_pending("nonexistent")  # Should not raise
 
     def test_does_not_cancel_completed_task(self):
         mock_task = MagicMock()
         mock_task.done.return_value = True
-        self.bot_module._pending_ops["srv"] = mock_task
-        self.bot_module._cancel_pending("srv")
+        state.pending_ops["srv"] = mock_task
+        state.cancel_pending("srv")
         mock_task.cancel.assert_not_called()
-        self.assertNotIn("srv", self.bot_module._pending_ops)
+        self.assertNotIn("srv", state.pending_ops)
 
 
 # ---------------------------------------------------------------------------
@@ -1522,18 +1522,18 @@ class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         from src import bot as bot_module
-        bot_module._maintenance_mode = False
+        state.maintenance_mode = False
 
     async def test_logs_blocked_during_maintenance(self):
         from src import bot as bot_module
         ctx = MagicMock()
         ctx.send = AsyncMock()
-        bot_module._maintenance_mode = True
-        bot_module._maintenance_reason = "update"
+        state.maintenance_mode = True
+        state.maintenance_reason = "update"
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             await bot_module.logs_cmd.callback(ctx, arg1=None, arg2=None)
         self.assertIn("maintenance", ctx.send.call_args[0][0].lower())
-        bot_module._maintenance_mode = False
+        state.maintenance_mode = False
 
     async def test_logs_command_returns_output(self):
         from src import bot as bot_module
@@ -1582,18 +1582,18 @@ class TestStatsCommand(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         from src import bot as bot_module
-        bot_module._maintenance_mode = False
+        state.maintenance_mode = False
 
     async def test_stats_blocked_during_maintenance(self):
         from src import bot as bot_module
         ctx = MagicMock()
         ctx.send = AsyncMock()
-        bot_module._maintenance_mode = True
-        bot_module._maintenance_reason = "patching"
+        state.maintenance_mode = True
+        state.maintenance_reason = "patching"
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             await bot_module.stats_cmd.callback(ctx, container_name=None)
         self.assertIn("maintenance", ctx.send.call_args[0][0].lower())
-        bot_module._maintenance_mode = False
+        state.maintenance_mode = False
 
     async def test_stats_command_error_field(self):
         from src import bot as bot_module
@@ -1650,14 +1650,14 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         from src import bot as bot_module
         self.bot_module = bot_module
-        bot_module._pending_ops.clear()
-        bot_module._maintenance_mode = False
+        state.pending_ops.clear()
+        state.maintenance_mode = False
 
     def tearDown(self):
-        for task in list(self.bot_module._pending_ops.values()):
+        for task in list(state.pending_ops.values()):
             if asyncio.isfuture(task) and not task.done():
                 task.cancel()
-        self.bot_module._pending_ops.clear()
+        state.pending_ops.clear()
 
     async def test_restart_now_immediate_as_admin(self):
         bot_module = self.bot_module
@@ -1702,7 +1702,7 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
 
         pending_task = MagicMock()
         pending_task.done.return_value = False
-        bot_module._pending_ops["server1"] = pending_task
+        state.pending_ops["server1"] = pending_task
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
@@ -1740,12 +1740,12 @@ class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         from src import bot as bot_module
         self.bot_module = bot_module
-        bot_module._maintenance_mode = False
-        bot_module._maintenance_reason = ""
+        state.maintenance_mode = False
+        state.maintenance_reason = ""
 
     def tearDown(self):
-        self.bot_module._maintenance_mode = False
-        self.bot_module._maintenance_reason = ""
+        state.maintenance_mode = False
+        state.maintenance_reason = ""
 
     async def test_maintenance_on(self):
         bot_module = self.bot_module
@@ -1759,15 +1759,15 @@ class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
             with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                 await bot_module.maintenance_cmd.callback(ctx, toggle="on", reason="Updating server")
 
-        self.assertTrue(bot_module._maintenance_mode)
-        self.assertEqual(bot_module._maintenance_reason, "Updating server")
+        self.assertTrue(state.maintenance_mode)
+        self.assertEqual(state.maintenance_reason, "Updating server")
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("enabled" in c.lower() for c in calls))
 
     async def test_maintenance_off(self):
         bot_module = self.bot_module
-        bot_module._maintenance_mode = True
-        bot_module._maintenance_reason = "Test"
+        state.maintenance_mode = True
+        state.maintenance_reason = "Test"
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.channel = MagicMock()
@@ -1778,8 +1778,8 @@ class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
             with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                 await bot_module.maintenance_cmd.callback(ctx, toggle="off", reason="")
 
-        self.assertFalse(bot_module._maintenance_mode)
-        self.assertEqual(bot_module._maintenance_reason, "")
+        self.assertFalse(state.maintenance_mode)
+        self.assertEqual(state.maintenance_reason, "")
 
     async def test_maintenance_status(self):
         bot_module = self.bot_module
@@ -1790,8 +1790,8 @@ class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
 
     async def test_maintenance_blocks_start(self):
         bot_module = self.bot_module
-        bot_module._maintenance_mode = True
-        bot_module._maintenance_reason = "Scheduled downtime"
+        state.maintenance_mode = True
+        state.maintenance_reason = "Scheduled downtime"
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.command = MagicMock()
@@ -1809,21 +1809,13 @@ class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Usage", ctx.send.call_args[0][0])
 
     def test_check_maintenance_allows_admin_commands(self):
-        bot_module = self.bot_module
-        bot_module._maintenance_mode = True
-        ctx = MagicMock()
-        ctx.command = MagicMock()
+        state.maintenance_mode = True
         for cmd_name in ("maintenance", "perm", "guide", "history"):
-            ctx.command.qualified_name = cmd_name
-            self.assertFalse(bot_module._check_maintenance(ctx))
+            self.assertFalse(state.is_maintenance_active(cmd_name))
 
     def test_check_maintenance_blocks_control_commands(self):
-        bot_module = self.bot_module
-        bot_module._maintenance_mode = True
-        ctx = MagicMock()
-        ctx.command = MagicMock()
-        ctx.command.qualified_name = "start"
-        self.assertTrue(bot_module._check_maintenance(ctx))
+        state.maintenance_mode = True
+        self.assertTrue(state.is_maintenance_active("start"))
 
 
 # ---------------------------------------------------------------------------
@@ -1833,43 +1825,36 @@ class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
 class TestCommandHistory(unittest.TestCase):
 
     def setUp(self):
-        from src import bot as bot_module
-        self.bot_module = bot_module
+        from src import history
+        self.history = history
         self.test_file = "test_history.json"
-        self.original_file = bot_module.HISTORY_FILE
-        bot_module.HISTORY_FILE = self.test_file
 
     def tearDown(self):
-        self.bot_module.HISTORY_FILE = self.original_file
         if os.path.exists(self.test_file):
             os.remove(self.test_file)
 
     def test_record_and_load_history(self):
-        bot_module = self.bot_module
-        bot_module._record_history("TestUser", "start", "server1")
-        entries = bot_module._load_history()
+        self.history.record(self.test_file, "TestUser", "start", "server1")
+        entries = self.history.load(self.test_file)
         self.assertEqual(len(entries), 1)
         self.assertEqual(entries[0]["user"], "TestUser")
         self.assertEqual(entries[0]["command"], "start")
         self.assertEqual(entries[0]["container"], "server1")
 
     def test_history_caps_at_200(self):
-        bot_module = self.bot_module
         for i in range(210):
-            bot_module._record_history(f"User{i}", "start", "server1")
-        entries = bot_module._load_history()
+            self.history.record(self.test_file, f"User{i}", "start", "server1")
+        entries = self.history.load(self.test_file)
         self.assertEqual(len(entries), 200)
 
     def test_load_history_empty_file(self):
-        bot_module = self.bot_module
-        entries = bot_module._load_history()
+        entries = self.history.load(self.test_file)
         self.assertEqual(entries, [])
 
     def test_load_history_corrupted_file(self):
-        bot_module = self.bot_module
         with open(self.test_file, "w") as f:
             f.write("not json{{{")
-        entries = bot_module._load_history()
+        entries = self.history.load(self.test_file)
         self.assertEqual(entries, [])
 
 
@@ -1883,7 +1868,7 @@ class TestHistoryCommand(unittest.IsolatedAsyncioTestCase):
         bot_module = self.bot_module
         ctx = MagicMock()
         ctx.send = AsyncMock()
-        with patch.object(bot_module, "_load_history", return_value=[]):
+        with patch("src.history.load", return_value=[]):
             await bot_module.history_cmd.callback(ctx, count=10)
         self.assertIn("No command history", ctx.send.call_args[0][0])
 
@@ -1894,7 +1879,7 @@ class TestHistoryCommand(unittest.IsolatedAsyncioTestCase):
         entries = [
             {"timestamp": "2026-01-01T00:00:00+00:00", "user": "TestUser", "command": "start", "container": "server1"},
         ]
-        with patch.object(bot_module, "_load_history", return_value=entries):
+        with patch("src.history.load", return_value=entries):
             await bot_module.history_cmd.callback(ctx, count=10)
         output = ctx.send.call_args[0][0]
         self.assertIn("TestUser", output)
@@ -1928,14 +1913,14 @@ class TestCrashAlerting(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
         from src import bot as bot_module
         self.bot_module = bot_module
-        bot_module._last_known_status.clear()
+        state.last_known_status.clear()
 
     def tearDown(self):
-        self.bot_module._last_known_status.clear()
+        state.last_known_status.clear()
 
     async def test_crash_detected_sends_alert(self):
         bot_module = self.bot_module
-        bot_module._last_known_status["server1"] = "running"
+        state.last_known_status["server1"] = "running"
 
         mock_channel = MagicMock()
         mock_channel.send = AsyncMock()
@@ -1949,17 +1934,17 @@ class TestCrashAlerting(unittest.IsolatedAsyncioTestCase):
 
         mock_channel.send.assert_called_once()
         self.assertIn("Crash Alert", mock_channel.send.call_args[0][0])
-        self.assertEqual(bot_module._last_known_status["server1"], "exited")
+        self.assertEqual(state.last_known_status["server1"], "exited")
 
     async def test_no_alert_when_still_running(self):
         bot_module = self.bot_module
-        bot_module._last_known_status["server1"] = "running"
+        state.last_known_status["server1"] = "running"
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="running")):
                 await bot_module.crash_check_loop.coro()
 
-        self.assertEqual(bot_module._last_known_status["server1"], "running")
+        self.assertEqual(state.last_known_status["server1"], "running")
 
     async def test_no_alert_on_first_check(self):
         """First poll seeds status without alerting."""
@@ -1970,11 +1955,11 @@ class TestCrashAlerting(unittest.IsolatedAsyncioTestCase):
                 await bot_module.crash_check_loop.coro()
 
         # No alert because previous status was None (first check)
-        self.assertEqual(bot_module._last_known_status["server1"], "exited")
+        self.assertEqual(state.last_known_status["server1"], "exited")
 
     async def test_crash_alert_uses_announce_channel_fallback(self):
         bot_module = self.bot_module
-        bot_module._last_known_status["server1"] = "running"
+        state.last_known_status["server1"] = "running"
 
         mock_channel = MagicMock()
         mock_channel.send = AsyncMock()
