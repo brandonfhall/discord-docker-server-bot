@@ -27,8 +27,22 @@ def _ensure_file():
             json.dump(data, f, indent=2)
 
 
+_cache = None
+_cache_mtime = 0.0
+
+
 def _load() -> Dict[str, List[str]]:
+    global _cache, _cache_mtime
     _ensure_file()
+
+    try:
+        current_mtime = os.path.getmtime(PERMISSIONS_FILE)
+    except OSError:
+        current_mtime = 0.0
+
+    if _cache is not None and current_mtime == _cache_mtime:
+        return _cache
+
     try:
         with open(PERMISSIONS_FILE, "r") as f:
             data = json.load(f)
@@ -50,12 +64,20 @@ def _load() -> Dict[str, List[str]]:
         logging.info(f"Backfilled missing permission actions: {missing}")
         _save(data)
 
+    _cache = data
+    _cache_mtime = current_mtime
     return data
 
 
 def _save(data: Dict[str, List[str]]):
+    global _cache, _cache_mtime
     with open(PERMISSIONS_FILE, "w") as f:
         json.dump(data, f, indent=2)
+    _cache = data
+    try:
+        _cache_mtime = os.path.getmtime(PERMISSIONS_FILE)
+    except OSError:
+        _cache_mtime = 0.0
 
 
 def is_member_allowed(action: str, member) -> bool:

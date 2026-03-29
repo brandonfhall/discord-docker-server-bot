@@ -19,18 +19,24 @@ A Dockerized Discord bot that controls one or more Docker containers (e.g., a ga
 ```
 src/
   config.py          — All env var parsing and validation; fails fast on missing required vars
-  docker_control.py  — Docker SDK wrappers; input validation + sanitization lives here
-  permissions.py     — JSON-backed role permission store (data/permissions.json)
-  bot.py             — Discord bot, FastAPI app, command handlers, logging setup
+  docker_control.py  — Docker SDK wrappers; Result namedtuple; input validation + sanitization
+  permissions.py     — JSON-backed role permission store with mtime-based caching
+  bot.py             — Discord bot, command handlers, crash alerting loop
+  api.py             — FastAPI app, /status endpoint, token verification
+  state.py           — BotState singleton (pending_ops, maintenance_mode, last_known_status)
+  history.py         — Thread-safe command history (load/save/record with file locking)
+  logging_config.py  — RedactingFilter + logging setup (stream + rotating file handlers)
 
 tests/
-  conftest.py        — Sets BOT_TOKEN + ALLOWED_CONTAINERS env vars before any src import
+  conftest.py        — Env var setup, autouse fixtures for state/cache reset between tests
   test_unit.py       — All tests (unittest classes, run with pytest)
+
+entrypoint.sh        — Docker entrypoint: detects socket GID, re-execs as non-root botuser
 
 .github/
   dependabot.yml     — Weekly updates for pip, docker, github-actions; grouped where sensible
   workflows/
-    tests.yaml       — CI: runs on every branch push and PR to main, uses pinned requirements
+    tests.yaml       — CI: runs on every branch push and PR to main, with coverage reporting
     docker-publish.yml — CD: builds + pushes Docker image on push to main or tags
     codeql.yml       — Security scanning on push/PR to main and weekly
 ```
