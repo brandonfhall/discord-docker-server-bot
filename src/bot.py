@@ -211,15 +211,13 @@ async def start(ctx, container_name: str = None):
     await ctx.send(res)
 
 
-@bot.command()
-@has_permission("stop")
-@commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
-async def stop(ctx, arg1: str = None, arg2: str = None):
-    """Stops the container. Use '!stop now' for immediate shutdown (requires stop_now permission)."""
+async def _delayed_container_op(ctx, arg1, arg2, *, action, now_action, docker_func,
+                                immediate_msg, countdown_msg_tpl):
+    """Shared logic for stop and restart commands with optional 'now' flag."""
     if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
         await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
         return
-    # Parse arguments: either could be the "now" flag or a container name
+
     now = False
     container_name = None
     for arg in (arg1, arg2):
@@ -233,54 +231,64 @@ async def stop(ctx, arg1: str = None, arg2: str = None):
         return
 
     if now:
-        if not ctx.author.guild_permissions.administrator and not permissions.is_member_allowed("stop_now", ctx.author):
-            await ctx.send("You do not have permission to use `!stop now`.")
+        if not ctx.author.guild_permissions.administrator and not permissions.is_member_allowed(now_action, ctx.author):
+            await ctx.send(f"You do not have permission to use `!{action} now`.")
             return
-
-        logging.info(f"User {ctx.author} requested immediate STOP for container '{target}'")
-        history.record(HISTORY_FILE,ctx.author, "stop now", target)
+        logging.info(f"User {ctx.author} requested immediate {action.upper()} for container '{target}'")
+        history.record(HISTORY_FILE, ctx.author, f"{action} now", target)
         state.cancel_pending(target)
-        await ctx.send(f"Stopping {target} immediately...")
-        msg = "Server is shutting down NOW. Please disconnect immediately."
-        await send_announcement(ctx, msg)
-        await docker_control.run_blocking(docker_control.announce_in_game, target, msg)
-        res = await docker_control.run_blocking(docker_control.stop_container, target)
-        logging.info(f"Immediate STOP result for {ctx.author}: {res}")
-        await ctx.send(f"Stop result: {res}")
+        await ctx.send(f"{action.capitalize()}{'ping' if action == 'stop' else 'ing'} {target} immediately...")
+        await send_announcement(ctx, immediate_msg)
+        await docker_control.run_blocking(docker_control.announce_in_game, target, immediate_msg)
+        res = await docker_control.run_blocking(docker_func, target)
+        logging.info(f"Immediate {action.upper()} result for {ctx.author}: {res}")
+        await ctx.send(f"{action.capitalize()} result: {res}")
         return
 
-    logging.info(f"User {ctx.author} requested STOP for container '{target}'")
+    logging.info(f"User {ctx.author} requested {action.upper()} for container '{target}'")
 
-    if target in state.pending_ops and not state.pending_ops[target].done():
+    if state.has_pending_op(target):
         await ctx.send(f"A shutdown or restart is already scheduled for `{target}`. Ignoring duplicate request.")
         return
 
-    history.record(HISTORY_FILE,ctx.author, "stop", target)
-
-    # Reserve the slot immediately before any awaits so concurrent duplicate
-    # commands see the container as pending even during the countdown sends.
+    history.record(HISTORY_FILE, ctx.author, action, target)
     state.pending_ops[target] = bot.loop.create_future()
 
-    await ctx.send(f"Server {target} will stop in {SHUTDOWN_DELAY//60} minutes (countdown started).")
-    msg = f"Server will shut down in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
-    await send_announcement(ctx, msg)
-    await docker_control.run_blocking(docker_control.announce_in_game, target, msg)
+    countdown_msg = countdown_msg_tpl.format(minutes=SHUTDOWN_DELAY // 60)
+    await ctx.send(f"Server {target} will {action} in {SHUTDOWN_DELAY // 60} minutes (countdown started).")
+    await send_announcement(ctx, countdown_msg)
+    await docker_control.run_blocking(docker_control.announce_in_game, target, countdown_msg)
 
-    async def do_stop():
+    async def do_operation():
         await asyncio.sleep(SHUTDOWN_DELAY)
         state.pending_ops.pop(target, None)
         try:
-            result = await docker_control.run_blocking(docker_control.stop_container, target)
-            logging.info(f"STOP execution result for {target}: {result}")
-            await ctx.send(f"Stop result: {result}")
+            result = await docker_control.run_blocking(docker_func, target)
+            logging.info(f"{action.upper()} execution result for {target}: {result}")
+            await ctx.send(f"{action.capitalize()} result: {result}")
         except Exception as e:
-            logging.error(f"Error during scheduled stop of {target}: {e}", exc_info=True)
+            logging.error(f"Error during scheduled {action} of {target}: {e}", exc_info=True)
             try:
-                await ctx.send(f"Error during scheduled stop of `{target}`: {e}")
+                await ctx.send(f"Error during scheduled {action} of `{target}`: {e}")
             except Exception:
                 pass
 
-    state.pending_ops[target] = bot.loop.create_task(do_stop())
+    state.pending_ops[target] = bot.loop.create_task(do_operation())
+
+
+@bot.command()
+@has_permission("stop")
+@commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
+async def stop(ctx, arg1: str = None, arg2: str = None):
+    """Stops the container. Use '!stop now' for immediate shutdown (requires stop_now permission)."""
+    await _delayed_container_op(
+        ctx, arg1, arg2,
+        action="stop",
+        now_action="stop_now",
+        docker_func=docker_control.stop_container,
+        immediate_msg="Server is shutting down NOW. Please disconnect immediately.",
+        countdown_msg_tpl="Server will shut down in {minutes} minutes. Please prepare to log off.",
+    )
 
 
 @bot.command()
@@ -288,72 +296,14 @@ async def stop(ctx, arg1: str = None, arg2: str = None):
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def restart(ctx, arg1: str = None, arg2: str = None):
     """Restarts the container (with countdown). Use '!restart now' for immediate restart (requires restart_now permission)."""
-    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
-        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
-        return
-
-    # Parse arguments: either could be the "now" flag or a container name
-    now = False
-    container_name = None
-    for arg in (arg1, arg2):
-        if arg and arg.lower() == "now":
-            now = True
-        elif arg:
-            container_name = arg
-
-    target = await resolve_container(ctx, container_name)
-    if not target:
-        return
-
-    if now:
-        if not ctx.author.guild_permissions.administrator and not permissions.is_member_allowed("restart_now", ctx.author):
-            await ctx.send("You do not have permission to use `!restart now`.")
-            return
-
-        logging.info(f"User {ctx.author} requested immediate RESTART for container '{target}'")
-        history.record(HISTORY_FILE,ctx.author, "restart now", target)
-        state.cancel_pending(target)
-        await ctx.send(f"Restarting {target} immediately...")
-        msg = "Server is restarting NOW. Please disconnect immediately."
-        await send_announcement(ctx, msg)
-        await docker_control.run_blocking(docker_control.announce_in_game, target, msg)
-        res = await docker_control.run_blocking(docker_control.restart_container, target)
-        logging.info(f"Immediate RESTART result for {ctx.author}: {res}")
-        await ctx.send(f"Restart result: {res}")
-        return
-
-    logging.info(f"User {ctx.author} requested RESTART for container '{target}'")
-
-    if target in state.pending_ops and not state.pending_ops[target].done():
-        await ctx.send(f"A shutdown or restart is already scheduled for `{target}`. Ignoring duplicate request.")
-        return
-
-    history.record(HISTORY_FILE,ctx.author, "restart", target)
-
-    # Reserve the slot immediately before any awaits so concurrent duplicate
-    # commands see the container as pending even during the countdown sends.
-    state.pending_ops[target] = bot.loop.create_future()
-
-    await ctx.send(f"Server {target} will restart in {SHUTDOWN_DELAY//60} minutes (countdown started).")
-    msg = f"Server will restart in {SHUTDOWN_DELAY//60} minutes. Please prepare to log off."
-    await send_announcement(ctx, msg)
-    await docker_control.run_blocking(docker_control.announce_in_game, target, msg)
-
-    async def do_restart():
-        await asyncio.sleep(SHUTDOWN_DELAY)
-        state.pending_ops.pop(target, None)
-        try:
-            result = await docker_control.run_blocking(docker_control.restart_container, target)
-            logging.info(f"RESTART execution result for {target}: {result}")
-            await ctx.send(f"Restart result: {result}")
-        except Exception as e:
-            logging.error(f"Error during scheduled restart of {target}: {e}", exc_info=True)
-            try:
-                await ctx.send(f"Error during scheduled restart of `{target}`: {e}")
-            except Exception:
-                pass
-
-    state.pending_ops[target] = bot.loop.create_task(do_restart())
+    await _delayed_container_op(
+        ctx, arg1, arg2,
+        action="restart",
+        now_action="restart_now",
+        docker_func=docker_control.restart_container,
+        immediate_msg="Server is restarting NOW. Please disconnect immediately.",
+        countdown_msg_tpl="Server will restart in {minutes} minutes. Please prepare to log off.",
+    )
 
 
 @bot.command(name="status")
