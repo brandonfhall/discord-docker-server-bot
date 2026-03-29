@@ -1,14 +1,32 @@
 {
-  "start": [
+  "announce": [
     "ServerAdmin"
   ],
-  "stop": [
+  "history": [
+    "ServerAdmin"
+  ],
+  "logs": [
+    "ServerAdmin"
+  ],
+  "maintenance": [
     "ServerAdmin"
   ],
   "restart": [
     "ServerAdmin"
   ],
-  "announce": [
+  "restart_now": [
+    "ServerAdmin"
+  ],
+  "start": [
+    "ServerAdmin"
+  ],
+  "stats": [
+    "ServerAdmin"
+  ],
+  "stop": [
+    "ServerAdmin"
+  ],
+  "stop_now": [
     "ServerAdmin"
   ]
 }

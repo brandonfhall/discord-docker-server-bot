@@ -75,7 +75,7 @@ No Docker daemon is required — all Docker calls are mocked.
 
 - Container names are validated against a strict allowlist regex (`^[a-zA-Z0-9_.-]+$`) before any Docker call.
 - Announcement messages are sanitized (whitelist only, 100-char limit) before being passed to `exec_run`.
-- The `_RedactingFilter` strips `BOT_TOKEN` and `STATUS_TOKEN` from all log output at the handler level.
+- `RedactingFilter` (in `src/logging_config.py`) strips `BOT_TOKEN` and `STATUS_TOKEN` from all log output at the handler level.
 - The bot can be locked to a single Discord guild via `DISCORD_GUILD_ID`.
 
 ### Docker operations
@@ -85,23 +85,23 @@ No Docker daemon is required — all Docker calls are mocked.
 
 ### Pending ops deduplication
 
-- `_pending_ops` (dict in `bot.py`) tracks in-flight `stop`/`restart` tasks per container. Duplicate commands while a task is pending are rejected with a user-facing message. A `Future` placeholder is registered *before* any `await` to prevent race conditions. `!stop now` and `!restart now` cancel any pending countdown for that container before issuing the immediate operation.
+- `state.pending_ops` (dict on the `BotState` singleton in `src/state.py`) tracks in-flight `stop`/`restart` tasks per container. Duplicate commands while a task is pending are rejected with a user-facing message. A `Future` placeholder is registered *before* any `await` to prevent race conditions. `!stop now` and `!restart now` cancel any pending countdown for that container before issuing the immediate operation.
 
 ### Crash alerting
 
 - A `discord.ext.tasks` loop (`crash_check_loop`) polls container statuses every `CRASH_CHECK_INTERVAL` seconds.
-- On startup, it seeds `_last_known_status` so it doesn't false-alert.
+- On startup, it seeds `state.last_known_status` so it doesn't false-alert.
 - When a container transitions from `running` to any other state, an alert is posted to `CRASH_ALERT_CHANNEL_ID` (or `ANNOUNCE_CHANNEL_ID` as fallback).
 
 ### Maintenance mode
 
-- `_maintenance_mode` (bool in `bot.py`) gates all container-control commands.
+- `state.maintenance_mode` (bool on the `BotState` singleton in `src/state.py`) gates all container-control commands.
 - Admin/utility commands (`maintenance`, `perm`, `guide`, `history`) remain available during maintenance.
 - Toggled via `!maintenance on [reason]` / `!maintenance off`.
 
 ### Command history
 
-- All permissioned commands are recorded to `HISTORY_FILE` (JSON) via `_record_history()`.
+- All permissioned commands are recorded to `HISTORY_FILE` (JSON) via `history.record()` in `src/history.py`. Thread-safe via a module-level lock.
 - Capped at 200 entries to prevent unbounded growth.
 - Viewable via `!history [count]`.
 
@@ -115,7 +115,7 @@ No Docker daemon is required — all Docker calls are mocked.
 - Stored in `data/permissions.json` (path configurable via `PERMISSIONS_FILE`).
 - Created on first run with defaults from `DEFAULT_ALLOWED_ROLES`.
 - Corrupted file is automatically re-initialized with defaults.
-- Missing actions are automatically backfilled on load (via `_EXPECTED_ACTIONS` in `permissions.py`), so existing installs pick up new actions without manual intervention.
+- Missing actions are automatically backfilled on load (via `ALL_ACTIONS` in `permissions.py`), so existing installs pick up new actions without manual intervention.
 - Discord `Administrator` permission bypasses the role check entirely.
 
 ## Environment Variables
@@ -125,7 +125,7 @@ See `.env.example` for the full list with descriptions. Required: `BOT_TOKEN`, `
 ## Adding a New Command
 
 1. Add the handler in `src/bot.py` using `@bot.command()` + `@has_permission("<action>")`.
-2. If it's a permissioned action, add the action name to `VALID_ACTIONS` in `bot.py` and `_EXPECTED_ACTIONS` in `permissions.py`.
+2. If it's a permissioned action, add the action name to `ALL_ACTIONS` in `src/permissions.py`. `VALID_ACTIONS` in `bot.py` is just a re-export of that set — no separate update needed.
 3. Add corresponding unit tests to `tests/test_unit.py`.
 4. Update the Discord Commands section in `README.md` and `DOCKERHUB.md`.
 
