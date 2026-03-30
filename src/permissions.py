@@ -7,7 +7,11 @@ from .config import PERMISSIONS_FILE, DEFAULT_ALLOWED_ROLES
 
 # Actions that should always have an entry in the permissions file.
 # When new actions are added, include them here so existing installs get backfilled.
-_EXPECTED_ACTIONS = {"start", "stop", "stop_now", "restart", "announce"}
+# This is the single source of truth — bot.py imports this as VALID_ACTIONS.
+ALL_ACTIONS = frozenset({
+    "start", "stop", "stop_now", "restart", "restart_now",
+    "announce", "logs", "stats", "maintenance", "history",
+})
 
 
 def _ensure_file():
@@ -18,19 +22,27 @@ def _ensure_file():
 
     if not os.path.exists(PERMISSIONS_FILE):
         logging.info(f"Initializing permissions file at: {os.path.abspath(PERMISSIONS_FILE)}")
-        data = {
-            "start": list(DEFAULT_ALLOWED_ROLES),
-            "stop": list(DEFAULT_ALLOWED_ROLES),
-            "stop_now": list(DEFAULT_ALLOWED_ROLES),
-            "restart": list(DEFAULT_ALLOWED_ROLES),
-            "announce": list(DEFAULT_ALLOWED_ROLES),
-        }
+        data = {action: list(DEFAULT_ALLOWED_ROLES) for action in sorted(ALL_ACTIONS)}
         with open(PERMISSIONS_FILE, "w", opener=lambda path, flags: __import__('os').open(path, flags, 0o600)) as f:
             json.dump(data, f, indent=2)
 
 
+_cache = None
+_cache_mtime = 0.0
+
+
 def _load() -> Dict[str, List[str]]:
+    global _cache, _cache_mtime
     _ensure_file()
+
+    try:
+        current_mtime = os.path.getmtime(PERMISSIONS_FILE)
+    except OSError:
+        current_mtime = 0.0
+
+    if _cache is not None and current_mtime == _cache_mtime:
+        return _cache
+
     try:
         with open(PERMISSIONS_FILE, "r") as f:
             data = json.load(f)
@@ -45,19 +57,27 @@ def _load() -> Dict[str, List[str]]:
             data = json.load(f)
 
     # Backfill any new actions missing from existing permission files
-    missing = [a for a in _EXPECTED_ACTIONS if a not in data]
+    missing = [a for a in ALL_ACTIONS if a not in data]
     if missing:
         for action in missing:
             data[action] = list(DEFAULT_ALLOWED_ROLES)
         logging.info(f"Backfilled missing permission actions: {missing}")
         _save(data)
 
+    _cache = data
+    _cache_mtime = current_mtime
     return data
 
 
 def _save(data: Dict[str, List[str]]):
+    global _cache, _cache_mtime
     with open(PERMISSIONS_FILE, "w") as f:
         json.dump(data, f, indent=2)
+    _cache = data
+    try:
+        _cache_mtime = os.path.getmtime(PERMISSIONS_FILE)
+    except OSError:
+        _cache_mtime = 0.0
 
 
 def is_member_allowed(action: str, member) -> bool:

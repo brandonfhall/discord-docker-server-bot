@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-A Dockerized Discord bot that controls one or more Docker containers (e.g., a game server) via `!` prefix commands. Users with the right Discord roles can start, stop, restart, and send announcements to containers. A FastAPI HTTP endpoint exposes container status and recent logs.
+A Dockerized Discord bot that controls one or more Docker containers (e.g., a game server) via `!` prefix commands. Users with the right Discord roles can start, stop, restart, view logs/stats, and send announcements to containers. Includes crash alerting, maintenance mode, command history/audit, and per-user cooldowns. A FastAPI HTTP endpoint exposes container status and recent logs.
 
 ## Stack
 
@@ -19,18 +19,24 @@ A Dockerized Discord bot that controls one or more Docker containers (e.g., a ga
 ```
 src/
   config.py          — All env var parsing and validation; fails fast on missing required vars
-  docker_control.py  — Docker SDK wrappers; input validation + sanitization lives here
-  permissions.py     — JSON-backed role permission store (data/permissions.json)
-  bot.py             — Discord bot, FastAPI app, command handlers, logging setup
+  docker_control.py  — Docker SDK wrappers; Result namedtuple; input validation + sanitization
+  permissions.py     — JSON-backed role permission store with mtime-based caching
+  bot.py             — Discord bot, command handlers, crash alerting loop
+  api.py             — FastAPI app, /status endpoint, token verification
+  state.py           — BotState singleton (pending_ops, maintenance_mode, last_known_status)
+  history.py         — Thread-safe command history (load/save/record with file locking)
+  logging_config.py  — RedactingFilter + logging setup (stream + rotating file handlers)
 
 tests/
-  conftest.py        — Sets BOT_TOKEN + ALLOWED_CONTAINERS env vars before any src import
+  conftest.py        — Env var setup, autouse fixtures for state/cache reset between tests
   test_unit.py       — All tests (unittest classes, run with pytest)
+
+entrypoint.sh        — Docker entrypoint: detects socket GID, re-execs as non-root botuser
 
 .github/
   dependabot.yml     — Weekly updates for pip, docker, github-actions; grouped where sensible
   workflows/
-    tests.yaml       — CI: runs on every branch push and PR to main, uses pinned requirements
+    tests.yaml       — CI: runs on every branch push and PR to main, with coverage reporting
     docker-publish.yml — CD: builds + pushes Docker image on push to main or tags
     codeql.yml       — Security scanning on push/PR to main and weekly
 ```
@@ -69,7 +75,7 @@ No Docker daemon is required — all Docker calls are mocked.
 
 - Container names are validated against a strict allowlist regex (`^[a-zA-Z0-9_.-]+$`) before any Docker call.
 - Announcement messages are sanitized (whitelist only, 100-char limit) before being passed to `exec_run`.
-- The `_RedactingFilter` strips `BOT_TOKEN` and `STATUS_TOKEN` from all log output at the handler level.
+- `RedactingFilter` (in `src/logging_config.py`) strips `BOT_TOKEN` and `STATUS_TOKEN` from all log output at the handler level.
 - The bot can be locked to a single Discord guild via `DISCORD_GUILD_ID`.
 
 ### Docker operations
@@ -79,14 +85,37 @@ No Docker daemon is required — all Docker calls are mocked.
 
 ### Pending ops deduplication
 
-- `_pending_ops` (dict in `bot.py`) tracks in-flight `stop`/`restart` tasks per container. Duplicate commands while a task is pending are rejected with a user-facing message. A `Future` placeholder is registered *before* any `await` to prevent race conditions. `!stop now` cancels any pending countdown for that container before issuing the immediate stop.
+- `state.pending_ops` (dict on the `BotState` singleton in `src/state.py`) tracks in-flight `stop`/`restart` tasks per container. Duplicate commands while a task is pending are rejected with a user-facing message. A `Future` placeholder is registered *before* any `await` to prevent race conditions. `!stop now` and `!restart now` cancel any pending countdown for that container before issuing the immediate operation.
+
+### Crash alerting
+
+- A `discord.ext.tasks` loop (`crash_check_loop`) polls container statuses every `CRASH_CHECK_INTERVAL` seconds.
+- On startup, it seeds `state.last_known_status` so it doesn't false-alert.
+- When a container transitions from `running` to any other state, an alert is posted to `CRASH_ALERT_CHANNEL_ID` (or `ANNOUNCE_CHANNEL_ID` as fallback).
+
+### Maintenance mode
+
+- `state.maintenance_mode` (bool on the `BotState` singleton in `src/state.py`) gates all container-control commands.
+- Admin/utility commands (`maintenance`, `perm`, `guide`, `history`) remain available during maintenance.
+- Toggled via `!maintenance on [reason]` / `!maintenance off`.
+
+### Command history
+
+- All permissioned commands are recorded to `HISTORY_FILE` (JSON) via `history.record()` in `src/history.py`. Thread-safe via a module-level lock.
+- Capped at 200 entries to prevent unbounded growth.
+- Viewable via `!history [count]`.
+
+### Command cooldowns
+
+- Per-user cooldowns via `@commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)`.
+- `CommandOnCooldown` errors are handled in `on_command_error` with a user-friendly message.
 
 ### Permissions
 
 - Stored in `data/permissions.json` (path configurable via `PERMISSIONS_FILE`).
 - Created on first run with defaults from `DEFAULT_ALLOWED_ROLES`.
 - Corrupted file is automatically re-initialized with defaults.
-- Missing actions are automatically backfilled on load (via `_EXPECTED_ACTIONS` in `permissions.py`), so existing installs pick up new actions without manual intervention.
+- Missing actions are automatically backfilled on load (via `ALL_ACTIONS` in `permissions.py`), so existing installs pick up new actions without manual intervention.
 - Discord `Administrator` permission bypasses the role check entirely.
 
 ## Environment Variables
@@ -96,7 +125,7 @@ See `.env.example` for the full list with descriptions. Required: `BOT_TOKEN`, `
 ## Adding a New Command
 
 1. Add the handler in `src/bot.py` using `@bot.command()` + `@has_permission("<action>")`.
-2. If it's a permissioned action, add the action name to `VALID_ACTIONS` in `bot.py` and `_EXPECTED_ACTIONS` in `permissions.py`.
+2. If it's a permissioned action, add the action name to `ALL_ACTIONS` in `src/permissions.py`. `VALID_ACTIONS` in `bot.py` is just a re-export of that set — no separate update needed.
 3. Add corresponding unit tests to `tests/test_unit.py`.
 4. Update the Discord Commands section in `README.md` and `DOCKERHUB.md`.
 

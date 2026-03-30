@@ -61,3 +61,11 @@ def _parse_channel_ids(raw: str) -> list:
 
 
 ALLOWED_CHANNEL_IDS = _parse_channel_ids(os.getenv("ALLOWED_CHANNEL_IDS", ""))
+
+COMMAND_COOLDOWN = _int_env("COMMAND_COOLDOWN", 5)
+
+CRASH_CHECK_INTERVAL = _int_env("CRASH_CHECK_INTERVAL", 30)
+
+CRASH_ALERT_CHANNEL_ID = _int_env("CRASH_ALERT_CHANNEL_ID", 0)
+
+HISTORY_FILE = os.getenv("HISTORY_FILE", "data/history.json").strip()

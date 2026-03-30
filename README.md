@@ -9,7 +9,13 @@ A Discord bot that controls Docker containers (game servers, services, etc.) thr
 
 - **Multi-Container Control** — Start, stop, and restart one or more Docker containers.
 - **Graceful Shutdowns** — Announces shutdowns/restarts in Discord and in-game, then waits a configurable delay before acting.
-- **Immediate Stop** — `!stop now` bypasses the countdown for emergencies (separate permission).
+- **Immediate Stop/Restart** — `!stop now` and `!restart now` bypass the countdown for emergencies (separate permissions).
+- **Container Logs** — View recent container logs directly in Discord with `!logs`.
+- **Resource Stats** — Monitor container CPU and memory usage with `!stats`.
+- **Crash Alerting** — Automatic Discord notifications when a container unexpectedly stops.
+- **Command History** — Audit log of all bot commands with `!history`.
+- **Maintenance Mode** — Temporarily disable all container commands with `!maintenance on`.
+- **Command Cooldowns** — Per-user rate limiting to prevent command spam.
 - **Role-Based Permissions** — Restrict commands to specific Discord roles, manageable live via `!perm` commands.
 - **Guild & Channel Locking** — Restrict the bot to a specific Discord server and/or set of channels.
 - **Status API** — HTTP endpoint exposing container status, permissions, and recent logs.
@@ -67,6 +73,10 @@ Enable **Developer Mode** in Discord (User Settings > Advanced) to copy IDs by r
 | `LOG_LEVEL` | | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) | `INFO` |
 | `PERMISSIONS_FILE` | | Path to permissions JSON file | `data/permissions.json` |
 | `LOG_FILE` | | Path to log file | `data/bot.log` |
+| `COMMAND_COOLDOWN` | | Per-user command cooldown in seconds | `5` |
+| `CRASH_CHECK_INTERVAL` | | Seconds between container status polls for crash alerting | `30` |
+| `CRASH_ALERT_CHANNEL_ID` | | Channel for crash alerts (falls back to `ANNOUNCE_CHANNEL_ID`) | `0` |
+| `HISTORY_FILE` | | Path to command history JSON file | `data/history.json` |
 
 See [.env.example](.env.example) for a copy-paste template.
 
@@ -82,19 +92,31 @@ All commands use the `!` prefix. Container name is optional when only one contai
 | `!stop [container]` | `stop` | Announce shutdown, wait for delay, then stop |
 | `!stop [container] now` | `stop` + `stop_now` | Immediately stop (skips countdown, cancels pending) |
 | `!restart [container]` | `restart` | Announce restart, wait for delay, then restart |
+| `!restart [container] now` | `restart` + `restart_now` | Immediately restart (skips countdown, cancels pending) |
 | `!announce [container] <message>` | `announce` | Send a message to the server console |
 | `!status [container]` | — | Show container status |
 | `!guide` | — | Show a quick command reference |
 
-### Permission Management (Admin only)
+### Info
 
-| Command | Description |
-|---|---|
-| `!perm list` | List roles allowed for each action |
-| `!perm add <action> <role>` | Grant a role permission for an action |
-| `!perm remove <action> <role>` | Revoke a role's permission |
+| Command | Permission | Description |
+|---|---|---|
+| `!logs [container] [lines]` | `logs` | View recent container logs (max 50 lines) |
+| `!stats [container]` | `stats` | Show container CPU and memory usage |
+| `!history [count]` | `history` | View recent command history (max 25 entries) |
 
-Valid actions: `start`, `stop`, `stop_now`, `restart`, `announce`.
+### Admin
+
+| Command | Permission | Description |
+|---|---|---|
+| `!maintenance on [reason]` | `maintenance` | Enable maintenance mode (blocks all container commands) |
+| `!maintenance off` | `maintenance` | Disable maintenance mode |
+| `!maintenance` | `maintenance` | Show current maintenance mode status |
+| `!perm list` | Admin | List roles allowed for each action |
+| `!perm add <action> <role>` | Admin | Grant a role permission for an action |
+| `!perm remove <action> <role>` | Admin | Revoke a role's permission |
+
+Valid actions: `start`, `stop`, `stop_now`, `restart`, `restart_now`, `announce`, `logs`, `stats`, `maintenance`, `history`.
 
 Discord Administrators bypass all permission checks.
 

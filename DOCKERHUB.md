@@ -1,6 +1,6 @@
 # Discord Docker Controller Bot
 
-A Discord bot that controls Docker containers (game servers, services, etc.) through `!` prefix commands. Role-based permissions, graceful shutdowns with in-game announcements, and an HTTP status API.
+A Discord bot that controls Docker containers (game servers, services, etc.) through `!` prefix commands. Role-based permissions, graceful shutdowns with in-game announcements, crash alerting, container logs/stats, maintenance mode, command history, and an HTTP status API.
 
 **Full documentation:** [GitHub](https://github.com/brandonfhall/discord-docker-server-bot)
 
@@ -46,8 +46,11 @@ volumes:
 | `ANNOUNCE_CHANNEL_ID` | | Channel for shutdown/restart announcements | `0` (command channel) |
 | `ANNOUNCE_ROLE_ID` | | Role to @mention during announcements | `0` (none) |
 | `ALLOWED_CHANNEL_IDS` | | Comma-separated channel IDs where commands work | (all) |
+| `COMMAND_COOLDOWN` | | Per-user command cooldown in seconds | `5` |
+| `CRASH_CHECK_INTERVAL` | | Seconds between crash-detection polls | `30` |
+| `CRASH_ALERT_CHANNEL_ID` | | Channel for crash alerts | `0` (uses `ANNOUNCE_CHANNEL_ID`) |
 
-See the [full variable list](https://github.com/brandonfhall/discord-docker-server-bot#environment-variables) for additional options (`STATUS_PORT`, `LOG_LEVEL`, etc.).
+See the [full variable list](https://github.com/brandonfhall/discord-docker-server-bot#environment-variables) for additional options (`STATUS_PORT`, `LOG_LEVEL`, `HISTORY_FILE`, etc.).
 
 ## Commands
 
@@ -57,8 +60,13 @@ See the [full variable list](https://github.com/brandonfhall/discord-docker-serv
 | `!stop [container]` | Announce shutdown, wait for delay, then stop |
 | `!stop [container] now` | Immediately stop (requires `stop_now` permission) |
 | `!restart [container]` | Announce restart, wait for delay, then restart |
+| `!restart [container] now` | Immediately restart (requires `restart_now` permission) |
 | `!announce [container] <message>` | Send a message to the server console |
 | `!status [container]` | Show container status |
+| `!logs [container] [lines]` | View recent container logs |
+| `!stats [container]` | Show container CPU/memory usage |
+| `!history [count]` | View recent command history |
+| `!maintenance on/off [reason]` | Toggle maintenance mode |
 | `!guide` | Quick command reference |
 | `!perm list` | List role permissions (admin only) |
 | `!perm add <action> <role>` | Grant permission (admin only) |
