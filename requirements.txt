@@ -1,6 +1,6 @@
 discord.py==2.3.2
 docker==7.1.0
-fastapi==0.135.1
+fastapi==0.135.2
 uvicorn[standard]==0.42.0
 python-dotenv==1.2.2
 httpx==0.28.1
