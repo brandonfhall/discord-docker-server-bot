@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 
 import discord
@@ -9,10 +10,19 @@ from discord.ext import commands, tasks
 from . import docker_control, history, permissions
 from .api import start_api
 from .config import (
-    BOT_TOKEN, STATUS_TOKEN, SHUTDOWN_DELAY, ALLOWED_CONTAINERS,
-    DISCORD_GUILD_ID, LOG_FILE, ANNOUNCE_CHANNEL_ID, ANNOUNCE_ROLE_ID,
-    ALLOWED_CHANNEL_IDS, COMMAND_COOLDOWN, CRASH_CHECK_INTERVAL,
-    CRASH_ALERT_CHANNEL_ID, HISTORY_FILE
+    BOT_TOKEN,
+    STATUS_TOKEN,
+    SHUTDOWN_DELAY,
+    ALLOWED_CONTAINERS,
+    DISCORD_GUILD_ID,
+    LOG_FILE,
+    ANNOUNCE_CHANNEL_ID,
+    ANNOUNCE_ROLE_ID,
+    ALLOWED_CHANNEL_IDS,
+    COMMAND_COOLDOWN,
+    CRASH_CHECK_INTERVAL,
+    CRASH_ALERT_CHANNEL_ID,
+    HISTORY_FILE,
 )
 from .logging_config import setup_logging
 from .state import state
@@ -27,7 +37,11 @@ intents.message_content = True
 intents.guilds = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents,
+    allowed_mentions=discord.AllowedMentions.none(),
+)
 
 
 @bot.check
@@ -85,7 +99,10 @@ async def send_announcement(ctx, message: str):
             logging.warning(f"Configured ANNOUNCE_CHANNEL_ID {ANNOUNCE_CHANNEL_ID} not found.")
 
     try:
-        await target_channel.send(content)
+        await target_channel.send(
+            content,
+            allowed_mentions=discord.AllowedMentions(roles=True),
+        )
     except Exception as e:
         logging.error(f"Failed to send announcement to {target_channel}: {e}", exc_info=True)
         return
@@ -191,8 +208,6 @@ async def _before_crash_check():
             pass
 
 
-
-
 @bot.command()
 @has_permission("start")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
@@ -205,27 +220,30 @@ async def start(ctx, container_name: str = None):
     if not target:
         return
     logging.info(f"User {ctx.author} requested START for container '{target}'")
-    history.record(HISTORY_FILE,ctx.author, "start", target)
+    history.record(HISTORY_FILE, ctx.author, "start", target)
     await ctx.send(f"Starting {target}...")
     res = await docker_control.run_blocking(docker_control.start_container, target)
     logging.info(f"START result for {ctx.author}: {res.message}")
     await ctx.send(res.message)
 
 
-async def _delayed_container_op(ctx, arg1, arg2, *, action, now_action, docker_func,
-                                immediate_msg, countdown_msg_tpl):
+def _format_delay(seconds: int) -> str:
+    """Return a human-readable delay string (e.g. '5 minutes', '30 seconds')."""
+    if seconds < 60:
+        return f"{seconds} second{'s' if seconds != 1 else ''}"
+    minutes = seconds // 60
+    return f"{minutes} minute{'s' if minutes != 1 else ''}"
+
+
+async def _delayed_container_op(ctx, *args, action, now_action, docker_func, immediate_msg, countdown_msg_tpl):
     """Shared logic for stop and restart commands with optional 'now' flag."""
     if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
         await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
         return
 
-    now = False
-    container_name = None
-    for arg in (arg1, arg2):
-        if arg and arg.lower() == "now":
-            now = True
-        elif arg:
-            container_name = arg
+    now = any(a.lower() == "now" for a in args)
+    container_name_args = [a for a in args if a.lower() != "now"]
+    container_name = container_name_args[0] if container_name_args else None
 
     target = await resolve_container(ctx, container_name)
     if not target:
@@ -255,8 +273,9 @@ async def _delayed_container_op(ctx, arg1, arg2, *, action, now_action, docker_f
     history.record(HISTORY_FILE, ctx.author, action, target)
     state.pending_ops[target] = bot.loop.create_future()
 
-    countdown_msg = countdown_msg_tpl.format(minutes=SHUTDOWN_DELAY // 60)
-    await ctx.send(f"Server {target} will {action} in {SHUTDOWN_DELAY // 60} minutes (countdown started).")
+    delay_str = _format_delay(SHUTDOWN_DELAY)
+    countdown_msg = countdown_msg_tpl.format(delay=delay_str)
+    await ctx.send(f"Server {target} will {action} in {delay_str} (countdown started).")
     await send_announcement(ctx, countdown_msg)
     await docker_control.run_blocking(docker_control.announce_in_game, target, countdown_msg)
 
@@ -280,30 +299,32 @@ async def _delayed_container_op(ctx, arg1, arg2, *, action, now_action, docker_f
 @bot.command()
 @has_permission("stop")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
-async def stop(ctx, arg1: str = None, arg2: str = None):
+async def stop(ctx, *args):
     """Stops the container. Use '!stop now' for immediate shutdown (requires stop_now permission)."""
     await _delayed_container_op(
-        ctx, arg1, arg2,
+        ctx,
+        *args,
         action="stop",
         now_action="stop_now",
         docker_func=docker_control.stop_container,
         immediate_msg="Server is shutting down NOW. Please disconnect immediately.",
-        countdown_msg_tpl="Server will shut down in {minutes} minutes. Please prepare to log off.",
+        countdown_msg_tpl="Server will shut down in {delay}. Please prepare to log off.",
     )
 
 
 @bot.command()
 @has_permission("restart")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
-async def restart(ctx, arg1: str = None, arg2: str = None):
+async def restart(ctx, *args):
     """Restarts the container (with countdown). Use '!restart now' for immediate restart (requires restart_now permission)."""
     await _delayed_container_op(
-        ctx, arg1, arg2,
+        ctx,
+        *args,
         action="restart",
         now_action="restart_now",
         docker_func=docker_control.restart_container,
         immediate_msg="Server is restarting NOW. Please disconnect immediately.",
-        countdown_msg_tpl="Server will restart in {minutes} minutes. Please prepare to log off.",
+        countdown_msg_tpl="Server will restart in {delay}. Please prepare to log off.",
     )
 
 
@@ -345,7 +366,7 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
         await ctx.send(f"Usage: `!announce <container_name> <message>`\nAvailable: {', '.join(ALLOWED_CONTAINERS)}")
         return
 
-    history.record(HISTORY_FILE,ctx.author, "announce", target)
+    history.record(HISTORY_FILE, ctx.author, "announce", target)
     res = await docker_control.run_blocking(docker_control.announce_in_game, target, message)
     await ctx.send(f"Sent to {target}: {res.message}")
 
@@ -359,6 +380,7 @@ async def announce_error(ctx, error):
 
 
 @bot.command(name="guide")
+@commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def guide(ctx):
     """Shows a simple usage guide."""
     lines = [
@@ -382,7 +404,7 @@ async def guide(ctx):
         "`!maintenance on/off [reason]` : Toggle maintenance mode",
         "`!perm list`   : List allowed roles",
         "`!perm add`    : Add role to action",
-        "`!perm remove` : Remove role from action"
+        "`!perm remove` : Remove role from action",
     ]
     logging.info(f"User {ctx.author} requested GUIDE")
     await ctx.send("\n".join(lines))
@@ -410,13 +432,15 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
     if not target:
         return
     logging.info(f"User {ctx.author} requested LOGS for container '{target}' ({lines} lines)")
-    history.record(HISTORY_FILE,ctx.author, f"logs {lines}", target)
+    history.record(HISTORY_FILE, ctx.author, f"logs {lines}", target)
     result = await docker_control.run_blocking(docker_control.container_logs, target, lines)
     if result is None:
         await ctx.send(f"Could not fetch logs for {target}.")
         return
-    # Truncate to fit Discord's 2000 char limit
+    # Truncate to fit Discord's 2000 char limit, then strip backticks so they
+    # can't break out of the code fence Discord renders around the output.
     output = result[-1900:] if len(result) > 1900 else result
+    output = output.replace("`", "'")
     if not output.strip():
         await ctx.send(f"No recent logs for {target}.")
         return
@@ -435,7 +459,7 @@ async def stats_cmd(ctx, container_name: str = None):
     if not target:
         return
     logging.info(f"User {ctx.author} requested STATS for container '{target}'")
-    history.record(HISTORY_FILE,ctx.author, "stats", target)
+    history.record(HISTORY_FILE, ctx.author, "stats", target)
     data = await docker_control.run_blocking(docker_control.container_stats, target)
     if data is None:
         await ctx.send(f"Could not fetch stats for {target}.")
@@ -488,21 +512,29 @@ async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
     """Toggle maintenance mode. Usage: !maintenance on/off [reason]"""
     if toggle is None:
         status = "ON" if state.maintenance_mode else "OFF"
-        await ctx.send(f"Maintenance mode is **{status}**." + (f" Reason: {state.maintenance_reason}" if state.maintenance_reason else ""))
+        await ctx.send(
+            f"Maintenance mode is **{status}**." + (f" Reason: {state.maintenance_reason}" if state.maintenance_reason else "")
+        )
         return
     toggle = toggle.lower()
     if toggle == "on":
         state.maintenance_mode = True
         state.maintenance_reason = reason or "No reason given."
+        cancelled = state.cancel_all_pending()
         logging.info(f"User {ctx.author} enabled maintenance mode: {state.maintenance_reason}")
+        if cancelled:
+            logging.info(f"Cancelled pending operations for: {', '.join(cancelled)}")
         history.record(HISTORY_FILE, ctx.author, "maintenance on", "")
-        await ctx.send(f"Maintenance mode **enabled**. Reason: {state.maintenance_reason}")
+        msg = f"Maintenance mode **enabled**. Reason: {state.maintenance_reason}"
+        if cancelled:
+            msg += f" Cancelled pending countdowns for: {', '.join(f'`{c}`' for c in cancelled)}."
+        await ctx.send(msg)
         await send_announcement(ctx, f"**Maintenance mode enabled.** {state.maintenance_reason}")
     elif toggle == "off":
         state.maintenance_mode = False
         state.maintenance_reason = ""
         logging.info(f"User {ctx.author} disabled maintenance mode")
-        history.record(HISTORY_FILE,ctx.author, "maintenance off", "")
+        history.record(HISTORY_FILE, ctx.author, "maintenance off", "")
         await ctx.send("Maintenance mode **disabled**. All commands are available again.")
         await send_announcement(ctx, "**Maintenance mode ended.** All commands are available again.")
     else:
@@ -550,7 +582,10 @@ async def perm_list(ctx):
 
 @perm.error
 async def perm_error(ctx, error):
-    logging.warning(f"Perm command error: {error} (Command: {ctx.command}, Subcommand: {ctx.invoked_subcommand}, Passed: {ctx.subcommand_passed})")
+    logging.warning(
+        f"Perm command error: {error} "
+        f"(Command: {ctx.command}, Subcommand: {ctx.invoked_subcommand}, Passed: {ctx.subcommand_passed})"
+    )
     if isinstance(error, commands.MissingRequiredArgument):
         # Check which subcommand was attempted.
         # If argument parsing fails, invoked_subcommand is often None, but subcommand_passed is set.
@@ -577,9 +612,7 @@ async def perm_error(ctx, error):
 
 
 def main():
-    loop = asyncio.get_event_loop()
-    # start API in background thread via loop.run_in_executor
-    loop.run_in_executor(None, start_api)
+    threading.Thread(target=start_api, daemon=True).start()
     bot.run(BOT_TOKEN)
 
 

@@ -24,6 +24,10 @@ services:
       - ANNOUNCE_ROLE_ID
       - STATUS_TOKEN
       - ALLOWED_CHANNEL_IDS
+      - COMMAND_COOLDOWN
+      - CRASH_CHECK_INTERVAL
+      - CRASH_ALERT_CHANNEL_ID
+      - HISTORY_FILE
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Defaults to rw, required for start/stop
       - bot_data:/app/data

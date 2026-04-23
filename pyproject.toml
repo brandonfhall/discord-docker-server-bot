@@ -1,0 +1,15 @@
+[tool.ruff]
+line-length = 127
+exclude = [".venv", "__pycache__", ".git", "dist", "build"]
+
+[tool.ruff.lint]
+# Match the two flake8 invocations from CI:
+# E9,F63,F7,F82 — errors (hard fail) + full lint at exit-zero
+select = ["E", "F", "W"]
+# C901 = max-complexity; ruff enforces it via mccabe
+[tool.ruff.lint.mccabe]
+max-complexity = 10
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

@@ -29,7 +29,7 @@ if not ALLOWED_CONTAINERS:
 
 DEFAULT_ALLOWED_ROLES = [r.strip() for r in os.getenv("DEFAULT_ALLOWED_ROLES", "ServerAdmin").split(",") if r.strip()]
 
-CONTAINER_MESSAGE_CMD = os.getenv("CONTAINER_MESSAGE_CMD", "echo \"Message: {message}\"")
+CONTAINER_MESSAGE_CMD = os.getenv("CONTAINER_MESSAGE_CMD", 'echo "Message: {message}"')
 
 STATUS_PORT = _int_env("STATUS_PORT", 8000)
 
@@ -46,6 +46,7 @@ DISCORD_GUILD_ID = _int_env("DISCORD_GUILD_ID", 0)
 ANNOUNCE_CHANNEL_ID = _int_env("ANNOUNCE_CHANNEL_ID", 0)
 
 ANNOUNCE_ROLE_ID = _int_env("ANNOUNCE_ROLE_ID", 0)
+
 
 def _parse_channel_ids(raw: str) -> list:
     result = []

@@ -30,7 +30,7 @@ volumes:
   bot_data:
 ```
 
-> **Security:** The bot requires `/var/run/docker.sock` access, granting full Docker daemon control. Run only on trusted hosts and keep your tokens secret.
+> **Security:** The bot requires `/var/run/docker.sock` access, granting full Docker daemon control. Run only on trusted hosts and keep your tokens secret. For stricter deployments, see the [docker-socket-proxy hardening guide](https://github.com/brandonfhall/discord-docker-server-bot#hardening-restricting-docker-socket-access) in the README.
 
 ## Environment Variables
 
@@ -66,7 +66,7 @@ See the [full variable list](https://github.com/brandonfhall/discord-docker-serv
 | `!logs [container] [lines]` | View recent container logs |
 | `!stats [container]` | Show container CPU/memory usage |
 | `!history [count]` | View recent command history |
-| `!maintenance on/off [reason]` | Toggle maintenance mode |
+| `!maintenance on/off [reason]` | Toggle maintenance mode (enabling cancels pending countdowns) |
 | `!guide` | Quick command reference |
 | `!perm list` | List role permissions (admin only) |
 | `!perm add <action> <role>` | Grant permission (admin only) |
@@ -82,8 +82,8 @@ Configure `CONTAINER_MESSAGE_CMD` with a `{message}` placeholder:
 # Valheim (screen)
 CONTAINER_MESSAGE_CMD=screen -S valheim -p 0 -X stuff "say {message}\015"
 
-# Minecraft (RCON)
-CONTAINER_MESSAGE_CMD=rcon-cli say "{message}"
+# Minecraft (RCON) — use -- to prevent a message starting with '-' being treated as a flag
+CONTAINER_MESSAGE_CMD=rcon-cli say -- "{message}"
 ```
 
 ## License

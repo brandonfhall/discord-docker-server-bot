@@ -1,140 +1,88 @@
-# CLAUDE.md — Project Guide for AI Assistants
+# CLAUDE.md
 
-## Project Overview
+Guidance for Claude Code working in this repository. Keep this file small and pointed — architecture and user docs live elsewhere.
 
-A Dockerized Discord bot that controls one or more Docker containers (e.g., a game server) via `!` prefix commands. Users with the right Discord roles can start, stop, restart, view logs/stats, and send announcements to containers. Includes crash alerting, maintenance mode, command history/audit, and per-user cooldowns. A FastAPI HTTP endpoint exposes container status and recent logs.
+- **User-facing docs:** @README.md
+- **Internal architecture & conventions:** @ARCHITECTURE.md
 
-## Stack
+## What this project is
 
-| Layer | Technology |
-|---|---|
-| Bot framework | `discord.py` (prefix commands) |
-| HTTP API | `fastapi` + `uvicorn` |
-| Docker control | `docker` SDK |
-| Config | `python-dotenv` + env vars |
-| Tests | `unittest` (stdlib) + `pytest` runner |
+Dockerized Python service that bridges Discord `!` commands to the Docker daemon, controlling one or more allow-listed containers (typically game servers). Also exposes a FastAPI `/status` endpoint. See @ARCHITECTURE.md for module layout and runtime model.
 
-## Directory Structure
-
-```
-src/
-  config.py          — All env var parsing and validation; fails fast on missing required vars
-  docker_control.py  — Docker SDK wrappers; Result namedtuple; input validation + sanitization
-  permissions.py     — JSON-backed role permission store with mtime-based caching
-  bot.py             — Discord bot, command handlers, crash alerting loop
-  api.py             — FastAPI app, /status endpoint, token verification
-  state.py           — BotState singleton (pending_ops, maintenance_mode, last_known_status)
-  history.py         — Thread-safe command history (load/save/record with file locking)
-  logging_config.py  — RedactingFilter + logging setup (stream + rotating file handlers)
-
-tests/
-  conftest.py        — Env var setup, autouse fixtures for state/cache reset between tests
-  test_unit.py       — All tests (unittest classes, run with pytest)
-
-entrypoint.sh        — Docker entrypoint: detects socket GID, re-execs as non-root botuser
-
-.github/
-  dependabot.yml     — Weekly updates for pip, docker, github-actions; grouped where sensible
-  workflows/
-    tests.yaml       — CI: runs on every branch push and PR to main, with coverage reporting
-    docker-publish.yml — CD: builds + pushes Docker image on push to main or tags
-    codeql.yml       — Security scanning on push/PR to main and weekly
-```
-
-## Running Locally
+## Common commands
 
 ```bash
-cp .env.example .env   # fill in BOT_TOKEN and ALLOWED_CONTAINERS at minimum
-docker compose up -d --build
-```
+# Tests (no Docker daemon required — all Docker calls are mocked)
+PYTHONPATH=. pytest -v tests/
 
-For local dev with live code reloading:
-```bash
+# Coverage report (matches CI)
+PYTHONPATH=. pytest -v --cov=src --cov-report=term-missing tests/
+
+# Lint + format check (matches CI)
+ruff check .
+ruff format --check .
+
+# Auto-fix lint issues and apply formatting
+ruff check --fix . && ruff format .
+
+# Local dev with live source mount
 docker compose -f docker-compose.dev.yml up --build
+
+# Image build smoke test
+docker build . --file Dockerfile --tag bot-test:latest
 ```
 
-## Running Tests
+Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`) are set by [tests/conftest.py](tests/conftest.py); don't re-set them in individual tests.
 
-```bash
-export PYTHONPATH=.
-pytest -v tests/
-```
+## House rules
 
-No Docker daemon is required — all Docker calls are mocked.
+- **Prefer editing existing files over creating new ones.** This repo has clear module boundaries — add a handler in `bot.py`, a Docker call in `docker_control.py`, a permission action in `permissions.py`, etc.
+- **All Docker SDK calls go through `run_blocking()`.** Never call `docker` SDK functions directly from an async handler — they're synchronous and will stall the event loop.
+- **All mutable cross-handler state belongs in `state.py`** (`BotState` singleton). Don't add new module-level globals in `bot.py`.
+- **Use the `Result` NamedTuple** in `docker_control.py` for operations with expected success/failure paths. Raise only on genuinely unexpected errors.
+- **Container names and announcement messages are validated at the `docker_control` layer,** not just at the command layer. Don't weaken `_VALID_CONTAINER_NAME` or `_VALID_MSG_CHARS` without reading [review.md §1.3](review.md) first.
+- **Log redaction is handler-level.** If you add a new secret env var, extend the token list passed to `setup_logging()` in [src/bot.py](src/bot.py).
+- **Don't use `asyncio.get_event_loop()`** in new code — it's deprecated. Use `asyncio.run()` or a dedicated thread for sync-launched services.
 
-## CI / CD
+## Adding a new command
 
-- **`tests.yaml`** — Runs on every branch push and PR to main with pinned `requirements.txt`. This is the pre-merge gate.
-- **`docker-publish.yml`** — Runs tests (pinned), then builds and pushes the image on merge to main or a version tag. Also runs on a monthly schedule to pick up base image security patches.
-- **`codeql.yml`** — Static security analysis, runs on PRs and weekly.
-- **Dependabot** — Opens PRs for direct dep bumps (pip, GitHub Actions, Docker base image). Each Dependabot PR is validated by `tests.yaml`.
+1. Add the handler to [src/bot.py](src/bot.py) with `@bot.command()` and (if privileged) `@has_permission("<action>")`.
+2. Add `@commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)` unless there's a reason not to.
+3. If the command introduces a new permission action, add it to `ALL_ACTIONS` in [src/permissions.py](src/permissions.py) (single source of truth — `bot.py` re-exports it as `VALID_ACTIONS`).
+4. Call `history.record(HISTORY_FILE, ctx.author, "<action>", target)` for auditable actions.
+5. If the command mutates containers, also check `state.is_maintenance_active(...)` and bail with a maintenance message.
+6. Add unit tests in the matching file under [tests/](tests/) (e.g. a new bot command goes in [tests/test_bot_commands.py](tests/test_bot_commands.py)). Follow the existing `unittest.IsolatedAsyncioTestCase` patterns with `AsyncMock` for `ctx.send`.
+7. Update the Commands table in both [README.md](README.md) and [DOCKERHUB.md](DOCKERHUB.md).
 
-## Key Conventions
+## Adding a new env var
 
-### Security
+1. Parse it in [src/config.py](src/config.py). Use `_int_env` for integers so invalid values fall back with a warning.
+2. Import it from `.config` wherever it's used — don't call `os.getenv()` in handler code.
+3. Document it in [.env.example](.env.example) and the env-var table in [README.md](README.md).
+4. If it's a secret, add it to the token list in `setup_logging()`.
 
-- Container names are validated against a strict allowlist regex (`^[a-zA-Z0-9_.-]+$`) before any Docker call.
-- Announcement messages are sanitized (whitelist only, 100-char limit) before being passed to `exec_run`.
-- `RedactingFilter` (in `src/logging_config.py`) strips `BOT_TOKEN` and `STATUS_TOKEN` from all log output at the handler level.
-- The bot can be locked to a single Discord guild via `DISCORD_GUILD_ID`.
+## Test conventions
 
-### Docker operations
+Tests live in [tests/](tests/) split by concern:
 
-- All Docker SDK calls are blocking; they run in a `ThreadPoolExecutor` via `run_blocking()` to avoid blocking the asyncio event loop.
-- A single lazy `_docker_client` instance is reused across calls.
+| File | What it covers |
+|---|---|
+| `test_config.py` | `TestConfig`, `TestNewConfig` |
+| `test_docker_control.py` | `TestDockerControl`, `TestDockerControlLogs`, `TestDockerControlStats` |
+| `test_permissions.py` | `TestPermissions` |
+| `test_bot_commands.py` | `TestBotLogic`, `TestPendingOps`, `TestStopNow`, `TestRestartNow`, `TestLogsCommand`, `TestStatsCommand`, `TestMaintenanceMode`, `TestHistoryCommand`, `TestCooldownError`, `TestGuideUpdated` |
+| `test_api.py` | `TestStatusEndpoint` |
+| `test_logging.py` | `TestRedactingFilter` |
+| `test_crash_alerting.py` | `TestCrashAlerting` |
+| `test_state.py` | `TestCancelPending`, `TestCommandHistory` |
 
-### Pending ops deduplication
+- Unit tests mock the Docker SDK; don't introduce tests that require a real Docker daemon.
+- Use `conftest.py` fixtures (`_reset_state`, `_reset_permissions_cache`) — they already run automatically.
+- For command handlers, build a fake `ctx` with `AsyncMock` for `ctx.send` and a `MagicMock` for `ctx.author` with `guild_permissions.administrator`, `roles`, and `id` set.
 
-- `state.pending_ops` (dict on the `BotState` singleton in `src/state.py`) tracks in-flight `stop`/`restart` tasks per container. Duplicate commands while a task is pending are rejected with a user-facing message. A `Future` placeholder is registered *before* any `await` to prevent race conditions. `!stop now` and `!restart now` cancel any pending countdown for that container before issuing the immediate operation.
+## What to check before claiming done
 
-### Crash alerting
-
-- A `discord.ext.tasks` loop (`crash_check_loop`) polls container statuses every `CRASH_CHECK_INTERVAL` seconds.
-- On startup, it seeds `state.last_known_status` so it doesn't false-alert.
-- When a container transitions from `running` to any other state, an alert is posted to `CRASH_ALERT_CHANNEL_ID` (or `ANNOUNCE_CHANNEL_ID` as fallback).
-
-### Maintenance mode
-
-- `state.maintenance_mode` (bool on the `BotState` singleton in `src/state.py`) gates all container-control commands.
-- Admin/utility commands (`maintenance`, `perm`, `guide`, `history`) remain available during maintenance.
-- Toggled via `!maintenance on [reason]` / `!maintenance off`.
-
-### Command history
-
-- All permissioned commands are recorded to `HISTORY_FILE` (JSON) via `history.record()` in `src/history.py`. Thread-safe via a module-level lock.
-- Capped at 200 entries to prevent unbounded growth.
-- Viewable via `!history [count]`.
-
-### Command cooldowns
-
-- Per-user cooldowns via `@commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)`.
-- `CommandOnCooldown` errors are handled in `on_command_error` with a user-friendly message.
-
-### Permissions
-
-- Stored in `data/permissions.json` (path configurable via `PERMISSIONS_FILE`).
-- Created on first run with defaults from `DEFAULT_ALLOWED_ROLES`.
-- Corrupted file is automatically re-initialized with defaults.
-- Missing actions are automatically backfilled on load (via `ALL_ACTIONS` in `permissions.py`), so existing installs pick up new actions without manual intervention.
-- Discord `Administrator` permission bypasses the role check entirely.
-
-## Environment Variables
-
-See `.env.example` for the full list with descriptions. Required: `BOT_TOKEN`, `ALLOWED_CONTAINERS`.
-
-## Adding a New Command
-
-1. Add the handler in `src/bot.py` using `@bot.command()` + `@has_permission("<action>")`.
-2. If it's a permissioned action, add the action name to `ALL_ACTIONS` in `src/permissions.py`. `VALID_ACTIONS` in `bot.py` is just a re-export of that set — no separate update needed.
-3. Add corresponding unit tests to `tests/test_unit.py`.
-4. Update the Discord Commands section in `README.md` and `DOCKERHUB.md`.
-
-## Branching & Commit SOP
-
-All changes should go through a feature branch and PR:
-
-1. Create a feature branch from `main`: `git checkout -b <type>/<short-description>` (e.g., `feat/stop-now`, `fix/pending-ops-race`, `docs/rewrite-readme`).
-2. Make changes and run `pytest -v tests/` to verify all tests pass.
-3. Commit with a clear message describing the change.
-4. Push the branch and open a PR against `main`.
-5. CI (`tests.yaml`) must pass before merge. `docker-publish.yml` runs on merge to `main` or version tags.
+- `ruff check .` is clean and `ruff format --check .` passes.
+- `pytest` passes with no new warnings.
+- If you touched command surface or env vars, both [README.md](README.md) and [DOCKERHUB.md](DOCKERHUB.md) reflect the change.
+- If you touched architecture or conventions, update [ARCHITECTURE.md](ARCHITECTURE.md) too.

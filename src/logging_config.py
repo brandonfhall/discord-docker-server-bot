@@ -25,8 +25,8 @@ class RedactingFilter(logging.Filter):
 def setup_logging(log_file: str, log_level: str, tokens: list):
     """Configure root logger with console + rotating file handler and token redaction."""
     log_dir = os.path.dirname(log_file)
-    if log_dir and not os.path.exists(log_dir):
-        os.makedirs(log_dir)
+    if log_dir:
+        os.makedirs(log_dir, exist_ok=True)
 
     logging.basicConfig(
         level=getattr(logging, log_level.upper(), logging.INFO),

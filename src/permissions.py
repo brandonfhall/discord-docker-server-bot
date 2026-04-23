@@ -8,22 +8,32 @@ from .config import PERMISSIONS_FILE, DEFAULT_ALLOWED_ROLES
 # Actions that should always have an entry in the permissions file.
 # When new actions are added, include them here so existing installs get backfilled.
 # This is the single source of truth — bot.py imports this as VALID_ACTIONS.
-ALL_ACTIONS = frozenset({
-    "start", "stop", "stop_now", "restart", "restart_now",
-    "announce", "logs", "stats", "maintenance", "history",
-})
+ALL_ACTIONS = frozenset(
+    {
+        "start",
+        "stop",
+        "stop_now",
+        "restart",
+        "restart_now",
+        "announce",
+        "logs",
+        "stats",
+        "maintenance",
+        "history",
+    }
+)
 
 
 def _ensure_file():
     # Ensure directory exists
     directory = os.path.dirname(PERMISSIONS_FILE)
-    if directory and not os.path.exists(directory):
-        os.makedirs(directory)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
 
     if not os.path.exists(PERMISSIONS_FILE):
         logging.info(f"Initializing permissions file at: {os.path.abspath(PERMISSIONS_FILE)}")
         data = {action: list(DEFAULT_ALLOWED_ROLES) for action in sorted(ALL_ACTIONS)}
-        with open(PERMISSIONS_FILE, "w", opener=lambda path, flags: __import__('os').open(path, flags, 0o600)) as f:
+        with open(PERMISSIONS_FILE, "w", opener=lambda path, flags: __import__("os").open(path, flags, 0o600)) as f:
             json.dump(data, f, indent=2)
 
 

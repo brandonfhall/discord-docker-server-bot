@@ -2,6 +2,7 @@
 
 import logging
 import os
+import secrets
 from collections import deque
 
 import uvicorn
@@ -10,7 +11,11 @@ from fastapi.responses import RedirectResponse
 
 from . import docker_control, permissions
 from .config import (
-    STATUS_TOKEN, STATUS_PORT, ALLOWED_CONTAINERS, LOG_FILE, BOT_TOKEN,
+    STATUS_TOKEN,
+    STATUS_PORT,
+    ALLOWED_CONTAINERS,
+    LOG_FILE,
+    BOT_TOKEN,
 )
 
 app = FastAPI()
@@ -25,8 +30,13 @@ async def verify_token(
         return
 
     token = x_auth_token or query_token
-    if not token or token != STATUS_TOKEN:
+    if not token or not secrets.compare_digest(token, STATUS_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
 
 
 @app.get("/")

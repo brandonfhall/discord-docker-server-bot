@@ -109,7 +109,7 @@ All commands use the `!` prefix. Container name is optional when only one contai
 
 | Command | Permission | Description |
 |---|---|---|
-| `!maintenance on [reason]` | `maintenance` | Enable maintenance mode (blocks all container commands) |
+| `!maintenance on [reason]` | `maintenance` | Enable maintenance mode (blocks all container commands, cancels pending countdowns) |
 | `!maintenance off` | `maintenance` | Disable maintenance mode |
 | `!maintenance` | `maintenance` | Show current maintenance mode status |
 | `!perm list` | Admin | List roles allowed for each action |
@@ -121,6 +121,8 @@ Valid actions: `start`, `stop`, `stop_now`, `restart`, `restart_now`, `announce`
 Discord Administrators bypass all permission checks.
 
 ## HTTP Status API
+
+**`GET /healthz`** — Unauthenticated liveness check. Returns `{"ok": true}` whenever the process is running. Used by the Docker healthcheck; also safe to use for external uptime monitoring.
 
 **`GET /status`** — Returns container status, permissions, and recent logs as JSON.
 
@@ -144,7 +146,14 @@ CONTAINER_MESSAGE_CMD=screen -S valheim -p 0 -X stuff "say {message}\015"
 CONTAINER_MESSAGE_CMD=rcon-cli say "{message}"
 ```
 
+> **Note on argument injection:** the sanitizer allows `-` in messages so players can type dashes naturally. This means a message starting with `-` could be interpreted as a flag by the downstream command (e.g., `rcon-cli say -n`). When your template invokes a tool that takes flags, use an explicit `--` separator to stop flag parsing:
+> ```
+> CONTAINER_MESSAGE_CMD=rcon-cli say -- "{message}"
+> ```
+
 ## Development
+
+For internal architecture, module boundaries, and runtime model, see [ARCHITECTURE.md](ARCHITECTURE.md). Contributor conventions are in [CLAUDE.md](CLAUDE.md).
 
 ### Running Tests
 
@@ -168,8 +177,38 @@ Mounts `src/` for live code updates (container restart required to pick up chang
 - The bot requires `/var/run/docker.sock` access, granting full Docker daemon control on the host. Run only on trusted hosts.
 - Keep `BOT_TOKEN` and `STATUS_TOKEN` secret.
 - Container names are validated against a strict allowlist regex before any Docker call.
-- All announcement messages are sanitized before being passed to `exec_run`.
+- All announcement messages are sanitized before being passed to `exec_run`. See the [In-Game Announcements](#in-game-announcements) section for a note on argument injection in command templates.
 - Sensitive tokens are redacted from all log output.
+
+### Entrypoint and Docker socket permissions
+
+The entrypoint detects the GID of `/var/run/docker.sock` at runtime and adds `botuser` to a matching group so it can reach the socket without running as root. On hosts where the socket is owned by GID 0 (root group — common on some Linux distributions), the entrypoint adds `botuser` to the `root` group. This is less restrictive than a dedicated `docker` group. If this concerns you, run the bot behind a [docker-socket-proxy](#hardening-restricting-docker-socket-access) so the socket is never exposed directly.
+
+### Hardening: restricting Docker socket access
+
+Mounting the raw Docker socket is convenient but gives the container root-equivalent access to the host. For stricter deployments, put a [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) in front of the socket and point the bot at it — you can expose only the `containers` endpoint the bot needs and deny everything else:
+
+```yaml
+services:
+  docker-proxy:
+    image: tecnativa/docker-socket-proxy
+    environment:
+      CONTAINERS: 1        # list/inspect/start/stop/restart
+      POST: 1              # required for start/stop/restart/exec
+      EXEC_CREATE: 1       # required for !announce
+      EXEC_START: 1
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
+  discord-bot:
+    # ...
+    environment:
+      - DOCKER_HOST=tcp://docker-proxy:2375
+    # drop the docker.sock volume; use the proxy instead
+```
+
+This narrows the blast radius from "any exploit → full host root" to "any exploit → the whitelisted container operations".
 
 ## License
 
