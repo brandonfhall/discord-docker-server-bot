@@ -180,6 +180,10 @@ Mounts `src/` for live code updates (container restart required to pick up chang
 - All announcement messages are sanitized before being passed to `exec_run`. See the [In-Game Announcements](#in-game-announcements) section for a note on argument injection in command templates.
 - Sensitive tokens are redacted from all log output.
 
+### Entrypoint and Docker socket permissions
+
+The entrypoint detects the GID of `/var/run/docker.sock` at runtime and adds `botuser` to a matching group so it can reach the socket without running as root. On hosts where the socket is owned by GID 0 (root group — common on some Linux distributions), the entrypoint adds `botuser` to the `root` group. This is less restrictive than a dedicated `docker` group. If this concerns you, run the bot behind a [docker-socket-proxy](#hardening-restricting-docker-socket-access) so the socket is never exposed directly.
+
 ### Hardening: restricting Docker socket access
 
 Mounting the raw Docker socket is convenient but gives the container root-equivalent access to the host. For stricter deployments, put a [docker-socket-proxy](https://github.com/Tecnativa/docker-socket-proxy) in front of the socket and point the bot at it — you can expose only the `containers` endpoint the bot needs and deny everything else:
