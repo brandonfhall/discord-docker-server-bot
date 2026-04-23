@@ -40,8 +40,9 @@ tests/
 .github/
   dependabot.yml     — Weekly pip, github-actions, docker base image updates (grouped)
   workflows/
-    tests.yaml          — CI: runs on every branch push + PRs to main
-    docker-publish.yml  — CD: builds + pushes the image on main, tags, and monthly
+    tests-reusable.yml  — Reusable workflow: lint, test+coverage, Docker build+smoke test
+    tests.yaml          — CI: runs on every branch push + PRs to main (calls tests-reusable)
+    docker-publish.yml  — CD: builds + pushes the image on main, tags, and monthly (calls tests-reusable)
     codeql.yml          — Security scanning on push/PR to main + weekly
 ```
 
@@ -97,7 +98,8 @@ A single lazily-constructed `_docker_client` is reused for the lifetime of the p
 
 ## CI / CD
 
-- [tests.yaml](.github/workflows/tests.yaml) — runs on every branch push and PR to main. Installs pinned `requirements.txt`, runs flake8 + pytest + coverage, then does a Docker build and startup smoke test. This is the pre-merge gate.
-- [docker-publish.yml](.github/workflows/docker-publish.yml) — on merge to main, on version tags, and monthly (to pick up base image patches). Re-runs tests, then builds+pushes multi-arch (amd64/arm64) images to Docker Hub and prunes old tags to the last 5.
+- [tests-reusable.yml](.github/workflows/tests-reusable.yml) — the canonical test job: sets up Python 3.11, installs pinned deps, runs flake8 + pytest with coverage, then does a Docker build and startup smoke test. Called by both workflows below via `workflow_call` so there is a single source of truth.
+- [tests.yaml](.github/workflows/tests.yaml) — triggers on every branch push and PR to main; calls `tests-reusable`. This is the pre-merge gate.
+- [docker-publish.yml](.github/workflows/docker-publish.yml) — triggers on merge to main, version tags, and monthly (to pick up base image patches). Calls `tests-reusable` first, then builds and pushes multi-arch (amd64/arm64) images to Docker Hub and prunes old tags to the last 5.
 - [codeql.yml](.github/workflows/codeql.yml) — Python + Actions static analysis on PRs and weekly.
 - **Dependabot** — weekly bumps for pip, GitHub Actions, and the Docker base image, grouped where it makes sense.
