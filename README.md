@@ -109,7 +109,7 @@ All commands use the `!` prefix. Container name is optional when only one contai
 
 | Command | Permission | Description |
 |---|---|---|
-| `!maintenance on [reason]` | `maintenance` | Enable maintenance mode (blocks all container commands) |
+| `!maintenance on [reason]` | `maintenance` | Enable maintenance mode (blocks all container commands, cancels pending countdowns) |
 | `!maintenance off` | `maintenance` | Disable maintenance mode |
 | `!maintenance` | `maintenance` | Show current maintenance mode status |
 | `!perm list` | Admin | List roles allowed for each action |

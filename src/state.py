@@ -16,6 +16,13 @@ class BotState:
         if task and not task.done():
             task.cancel()
 
+    def cancel_all_pending(self) -> list:
+        """Cancel all pending stop/restart tasks. Returns list of cancelled container names."""
+        cancelled = [name for name in list(self.pending_ops) if self.has_pending_op(name)]
+        for name in cancelled:
+            self.cancel_pending(name)
+        return cancelled
+
     def has_pending_op(self, container: str) -> bool:
         """Check if a container has a pending operation."""
         task = self.pending_ops.get(container)

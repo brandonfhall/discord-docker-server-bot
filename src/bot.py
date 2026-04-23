@@ -1,6 +1,7 @@
 import asyncio
 import logging
 import os
+import threading
 from datetime import datetime, timezone
 
 import discord
@@ -227,20 +228,16 @@ def _format_delay(seconds: int) -> str:
     return f"{minutes} minute{'s' if minutes != 1 else ''}"
 
 
-async def _delayed_container_op(ctx, arg1, arg2, *, action, now_action, docker_func,
+async def _delayed_container_op(ctx, *args, action, now_action, docker_func,
                                 immediate_msg, countdown_msg_tpl):
     """Shared logic for stop and restart commands with optional 'now' flag."""
     if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
         await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
         return
 
-    now = False
-    container_name = None
-    for arg in (arg1, arg2):
-        if arg and arg.lower() == "now":
-            now = True
-        elif arg:
-            container_name = arg
+    now = any(a.lower() == "now" for a in args)
+    container_name_args = [a for a in args if a.lower() != "now"]
+    container_name = container_name_args[0] if container_name_args else None
 
     target = await resolve_container(ctx, container_name)
     if not target:
@@ -296,10 +293,10 @@ async def _delayed_container_op(ctx, arg1, arg2, *, action, now_action, docker_f
 @bot.command()
 @has_permission("stop")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
-async def stop(ctx, arg1: str = None, arg2: str = None):
+async def stop(ctx, *args):
     """Stops the container. Use '!stop now' for immediate shutdown (requires stop_now permission)."""
     await _delayed_container_op(
-        ctx, arg1, arg2,
+        ctx, *args,
         action="stop",
         now_action="stop_now",
         docker_func=docker_control.stop_container,
@@ -311,10 +308,10 @@ async def stop(ctx, arg1: str = None, arg2: str = None):
 @bot.command()
 @has_permission("restart")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
-async def restart(ctx, arg1: str = None, arg2: str = None):
+async def restart(ctx, *args):
     """Restarts the container (with countdown). Use '!restart now' for immediate restart (requires restart_now permission)."""
     await _delayed_container_op(
-        ctx, arg1, arg2,
+        ctx, *args,
         action="restart",
         now_action="restart_now",
         docker_func=docker_control.restart_container,
@@ -513,9 +510,15 @@ async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
     if toggle == "on":
         state.maintenance_mode = True
         state.maintenance_reason = reason or "No reason given."
+        cancelled = state.cancel_all_pending()
         logging.info(f"User {ctx.author} enabled maintenance mode: {state.maintenance_reason}")
+        if cancelled:
+            logging.info(f"Cancelled pending operations for: {', '.join(cancelled)}")
         history.record(HISTORY_FILE, ctx.author, "maintenance on", "")
-        await ctx.send(f"Maintenance mode **enabled**. Reason: {state.maintenance_reason}")
+        msg = f"Maintenance mode **enabled**. Reason: {state.maintenance_reason}"
+        if cancelled:
+            msg += f" Cancelled pending countdowns for: {', '.join(f'`{c}`' for c in cancelled)}."
+        await ctx.send(msg)
         await send_announcement(ctx, f"**Maintenance mode enabled.** {state.maintenance_reason}")
     elif toggle == "off":
         state.maintenance_mode = False
@@ -596,9 +599,7 @@ async def perm_error(ctx, error):
 
 
 def main():
-    loop = asyncio.get_event_loop()
-    # start API in background thread via loop.run_in_executor
-    loop.run_in_executor(None, start_api)
+    threading.Thread(target=start_api, daemon=True).start()
     bot.run(BOT_TOKEN)
 
 

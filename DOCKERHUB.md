@@ -66,7 +66,7 @@ See the [full variable list](https://github.com/brandonfhall/discord-docker-serv
 | `!logs [container] [lines]` | View recent container logs |
 | `!stats [container]` | Show container CPU/memory usage |
 | `!history [count]` | View recent command history |
-| `!maintenance on/off [reason]` | Toggle maintenance mode |
+| `!maintenance on/off [reason]` | Toggle maintenance mode (enabling cancels pending countdowns) |
 | `!guide` | Quick command reference |
 | `!perm list` | List role permissions (admin only) |
 | `!perm add <action> <role>` | Grant permission (admin only) |

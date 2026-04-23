@@ -561,7 +561,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))):
                         with patch.object(bot_module.bot, "loop", mock_loop):
-                            await bot_module.restart.callback(ctx, arg1=None, arg2=None)
+                            await bot_module.restart.callback(ctx)
 
         first_msg = ctx.send.call_args_list[0][0][0]
         self.assertIn("will restart", first_msg)
@@ -984,7 +984,7 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         state.pending_ops["test_container"] = fake_task
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
-            await bot_module.stop.callback(ctx, arg1="test_container")
+            await bot_module.stop.callback(ctx, "test_container")
 
         ctx.send.assert_called_once()
         self.assertIn("already scheduled", ctx.send.call_args[0][0].lower())
@@ -1001,7 +1001,7 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         state.pending_ops["test_container"] = fake_task
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
-            await bot_module.restart.callback(ctx, arg1="test_container", arg2=None)
+            await bot_module.restart.callback(ctx, "test_container")
 
         ctx.send.assert_called_once()
         self.assertIn("already scheduled", ctx.send.call_args[0][0].lower())
@@ -1030,7 +1030,7 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))):
                         with patch.object(bot_module.bot, "loop", mock_loop):
-                            await bot_module.stop.callback(ctx, arg1="test_container")
+                            await bot_module.stop.callback(ctx, "test_container")
 
         # Countdown message sent (not a rejection)
         first_msg = ctx.send.call_args_list[0][0][0]
@@ -1066,8 +1066,8 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))):
                         with patch.object(bot_module.bot, "loop", mock_loop):
-                            await bot_module.stop.callback(ctx1, arg1="test_container")
-                            await bot_module.stop.callback(ctx2, arg1="test_container")
+                            await bot_module.stop.callback(ctx1, "test_container")
+                            await bot_module.stop.callback(ctx2, "test_container")
 
         ctx2.send.assert_called_once()
         self.assertIn("already scheduled", ctx2.send.call_args[0][0].lower())
@@ -1106,7 +1106,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
-                        await bot_module.stop.callback(ctx, arg1="now")
+                        await bot_module.stop.callback(ctx, "now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("immediately" in c for c in calls))
@@ -1133,7 +1133,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
-                        await bot_module.stop.callback(ctx, arg1="now")
+                        await bot_module.stop.callback(ctx, "now")
 
         # Discord announcement sent to channel
         ctx.channel.send.assert_called_once()
@@ -1158,7 +1158,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
-                        await bot_module.stop.callback(ctx, arg1="server1", arg2="now")
+                        await bot_module.stop.callback(ctx, "server1", "now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("server1" in c and "immediately" in c for c in calls))
@@ -1177,7 +1177,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
-                        await bot_module.stop.callback(ctx, arg1="now", arg2="server1")
+                        await bot_module.stop.callback(ctx, "now", "server1")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("server1" in c and "immediately" in c for c in calls))
@@ -1191,7 +1191,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch("src.bot.permissions.is_member_allowed", return_value=False):
-                await bot_module.stop.callback(ctx, arg1="now")
+                await bot_module.stop.callback(ctx, "now")
 
         ctx.send.assert_called_once()
         self.assertIn("permission", ctx.send.call_args[0][0].lower())
@@ -1211,7 +1211,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.permissions.is_member_allowed", return_value=True) as mock_perm:
                         with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
-                            await bot_module.stop.callback(ctx, arg1="now")
+                            await bot_module.stop.callback(ctx, "now")
 
         mock_perm.assert_called_once_with("stop_now", ctx.author)
         calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -1235,7 +1235,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
-                        await bot_module.stop.callback(ctx, arg1="now")
+                        await bot_module.stop.callback(ctx, "now")
 
         pending_task.cancel.assert_called_once()
         self.assertNotIn("server1", state.pending_ops)
@@ -1258,7 +1258,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))):
                         with patch.object(bot_module.bot, "loop", mock_loop):
-                            await bot_module.stop.callback(ctx, arg1=None)
+                            await bot_module.stop.callback(ctx)
 
         first_msg = ctx.send.call_args_list[0][0][0]
         self.assertIn("will stop", first_msg)
@@ -1278,7 +1278,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
                 with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                     with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                         with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
-                            await bot_module.stop.callback(ctx, arg1=variant)
+                            await bot_module.stop.callback(ctx, variant)
 
             calls = [c[0][0] for c in ctx.send.call_args_list]
             self.assertTrue(any("immediately" in c for c in calls), f"Failed for variant {variant!r}")
@@ -1291,7 +1291,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         ctx.author.guild_permissions.administrator = True
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
-            await bot_module.stop.callback(ctx, arg1="evil", arg2="now")
+            await bot_module.stop.callback(ctx, "evil", "now")
 
         ctx.send.assert_called_once()
         self.assertIn("not in the allowed list", ctx.send.call_args[0][0])
@@ -1304,7 +1304,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         ctx.author.guild_permissions.administrator = True
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
-            await bot_module.stop.callback(ctx, arg1="now")
+            await bot_module.stop.callback(ctx, "now")
 
         ctx.send.assert_called_once()
         self.assertIn("Please specify one", ctx.send.call_args[0][0])
@@ -1685,7 +1685,7 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "restarted"))):
-                        await bot_module.restart.callback(ctx, arg1="now", arg2=None)
+                        await bot_module.restart.callback(ctx, "now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("immediately" in c for c in calls))
@@ -1699,7 +1699,7 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch("src.bot.permissions.is_member_allowed", return_value=False):
-                await bot_module.restart.callback(ctx, arg1="now", arg2=None)
+                await bot_module.restart.callback(ctx, "now")
 
         ctx.send.assert_called_once()
         self.assertIn("permission", ctx.send.call_args[0][0].lower())
@@ -1721,7 +1721,7 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "restarted"))):
-                        await bot_module.restart.callback(ctx, arg1="now", arg2=None)
+                        await bot_module.restart.callback(ctx, "now")
 
         pending_task.cancel.assert_called_once()
 
@@ -1738,7 +1738,7 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "restarted"))):
-                        await bot_module.restart.callback(ctx, arg1="server1", arg2="now")
+                        await bot_module.restart.callback(ctx, "server1", "now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("server1" in c and "immediately" in c for c in calls))
@@ -1776,6 +1776,28 @@ class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(state.maintenance_reason, "Updating server")
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("enabled" in c.lower() for c in calls))
+
+    async def test_maintenance_on_cancels_pending_ops(self):
+        """Enabling maintenance mode should cancel any in-flight countdowns."""
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        state.pending_ops["server1"] = mock_task
+
+        with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+            with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                await bot_module.maintenance_cmd.callback(ctx, toggle="on", reason="Patching")
+
+        mock_task.cancel.assert_called_once()
+        self.assertNotIn("server1", state.pending_ops)
+        calls = " ".join(c[0][0] for c in ctx.send.call_args_list)
+        self.assertIn("server1", calls)
 
     async def test_maintenance_off(self):
         bot_module = self.bot_module

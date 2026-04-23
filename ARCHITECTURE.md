@@ -48,7 +48,7 @@ tests/
 ## Runtime model
 
 - **Main thread:** discord.py's asyncio event loop running `bot.run()`.
-- **API thread:** uvicorn serving FastAPI in a worker launched by `main()`. Shares the process (and therefore the module-level `_docker_client`, permissions cache, and root logger) with the bot.
+- **API thread:** uvicorn serving FastAPI in a daemon `threading.Thread` started by `main()`. Using a daemon thread means it exits automatically when the main process ends, with no explicit shutdown needed. Shares the process (and therefore the module-level `_docker_client`, permissions cache, and root logger) with the bot.
 - **Docker executor:** a `ThreadPoolExecutor(max_workers=DOCKER_MAX_WORKERS)` in [src/docker_control.py](src/docker_control.py). All Docker SDK calls are blocking and must be submitted via `run_blocking()` so they don't stall the event loop.
 
 A single lazily-constructed `_docker_client` is reused for the lifetime of the process.
@@ -87,7 +87,7 @@ A single lazily-constructed `_docker_client` is reused for the lifetime of the p
 ### Maintenance mode
 
 - Toggled via `!maintenance on/off`. Blocks all container commands except `maintenance`, `perm*`, `guide`, and `history` (see `BotState.is_maintenance_active`).
-- **Caveat:** maintenance does **not** cancel already-scheduled countdowns; an in-flight `!stop` fires regardless.
+- Enabling maintenance calls `state.cancel_all_pending()`, which cancels and removes all in-flight stop/restart countdowns. The cancelled container names are included in the confirmation message.
 
 ### Crash detection loop
 
