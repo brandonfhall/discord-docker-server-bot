@@ -1,11 +1,6 @@
 import asyncio
 import logging
 import os
-
-# Set required env vars before any src imports so config.py validation passes.
-os.environ.setdefault("BOT_TOKEN", "test-token")
-os.environ.setdefault("ALLOWED_CONTAINERS", "test_container")
-
 import json
 import sys
 import unittest

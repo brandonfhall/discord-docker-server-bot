@@ -17,8 +17,8 @@ ALL_ACTIONS = frozenset({
 def _ensure_file():
     # Ensure directory exists
     directory = os.path.dirname(PERMISSIONS_FILE)
-    if directory and not os.path.exists(directory):
-        os.makedirs(directory)
+    if directory:
+        os.makedirs(directory, exist_ok=True)
 
     if not os.path.exists(PERMISSIONS_FILE):
         logging.info(f"Initializing permissions file at: {os.path.abspath(PERMISSIONS_FILE)}")

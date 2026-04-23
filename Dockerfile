@@ -6,6 +6,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends gosu \
     && rm -rf /var/lib/apt/lists/*
 
 COPY requirements.txt ./
+# Pin requests<2.32 to work around docker-py 7.1 incompatibility with requests 2.32+.
+# Remove this pin once docker-py ships a release that supports requests>=2.32.
+# Track: https://github.com/docker/docker-py/issues/3256
 RUN pip install --no-cache-dir -r requirements.txt \
     && pip install "requests<2.32.0"
 

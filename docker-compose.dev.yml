@@ -26,6 +26,10 @@ services:
       - ANNOUNCE_ROLE_ID
       - ALLOWED_CHANNEL_IDS
       - STATUS_TOKEN
+      - COMMAND_COOLDOWN
+      - CRASH_CHECK_INTERVAL
+      - CRASH_ALERT_CHANNEL_ID
+      - HISTORY_FILE
     healthcheck:
       test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8000), timeout=5)'"]
       interval: 30s

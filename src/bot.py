@@ -205,7 +205,7 @@ async def start(ctx, container_name: str = None):
     if not target:
         return
     logging.info(f"User {ctx.author} requested START for container '{target}'")
-    history.record(HISTORY_FILE,ctx.author, "start", target)
+    history.record(HISTORY_FILE, ctx.author, "start", target)
     await ctx.send(f"Starting {target}...")
     res = await docker_control.run_blocking(docker_control.start_container, target)
     logging.info(f"START result for {ctx.author}: {res.message}")
@@ -345,7 +345,7 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
         await ctx.send(f"Usage: `!announce <container_name> <message>`\nAvailable: {', '.join(ALLOWED_CONTAINERS)}")
         return
 
-    history.record(HISTORY_FILE,ctx.author, "announce", target)
+    history.record(HISTORY_FILE, ctx.author, "announce", target)
     res = await docker_control.run_blocking(docker_control.announce_in_game, target, message)
     await ctx.send(f"Sent to {target}: {res.message}")
 
@@ -359,6 +359,7 @@ async def announce_error(ctx, error):
 
 
 @bot.command(name="guide")
+@commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def guide(ctx):
     """Shows a simple usage guide."""
     lines = [
@@ -410,7 +411,7 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
     if not target:
         return
     logging.info(f"User {ctx.author} requested LOGS for container '{target}' ({lines} lines)")
-    history.record(HISTORY_FILE,ctx.author, f"logs {lines}", target)
+    history.record(HISTORY_FILE, ctx.author, f"logs {lines}", target)
     result = await docker_control.run_blocking(docker_control.container_logs, target, lines)
     if result is None:
         await ctx.send(f"Could not fetch logs for {target}.")
@@ -435,7 +436,7 @@ async def stats_cmd(ctx, container_name: str = None):
     if not target:
         return
     logging.info(f"User {ctx.author} requested STATS for container '{target}'")
-    history.record(HISTORY_FILE,ctx.author, "stats", target)
+    history.record(HISTORY_FILE, ctx.author, "stats", target)
     data = await docker_control.run_blocking(docker_control.container_stats, target)
     if data is None:
         await ctx.send(f"Could not fetch stats for {target}.")
@@ -502,7 +503,7 @@ async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
         state.maintenance_mode = False
         state.maintenance_reason = ""
         logging.info(f"User {ctx.author} disabled maintenance mode")
-        history.record(HISTORY_FILE,ctx.author, "maintenance off", "")
+        history.record(HISTORY_FILE, ctx.author, "maintenance off", "")
         await ctx.send("Maintenance mode **disabled**. All commands are available again.")
         await send_announcement(ctx, "**Maintenance mode ended.** All commands are available again.")
     else:
