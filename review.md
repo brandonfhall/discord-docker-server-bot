@@ -376,3 +376,173 @@ If I had a backlog to drain, this is the order:
 **Tests:** well-covered (22 classes, 2000 lines) but organised as a monolith. Splitting the file is a clear win.
 
 **Recommendation:** prioritise the P1 list above. The whole thing is ~2 hours of work and closes the highest-leverage items. Then decide whether P2/P3 is worth the time.
+
+---
+
+## 7. Implementation Phases
+
+> Engineer's breakdown from the architect's review. Phase 1 is already done. Each subsequent phase is designed to be a self-contained branch + PR that can be merged independently.
+
+---
+
+### ✅ Decisions recorded
+
+| # | Question | Decision |
+|---|---|---|
+| Q1 | `env_file` vs passthrough list | **Add the 4 missing vars** to the existing passthrough list in both compose files |
+| Q2 | `STATUS_TOKEN` fail-secure | **Non-breaking** — keep open-by-default, but make the warning louder in `on_ready` and docs |
+| Q3 | Maintenance + in-flight countdowns | **Cancel pending ops** when `!maintenance on` is invoked |
+| Q4 | Docker TOCTOU | **Friendly `try/except APIError`** wrapping in `start_container` / `stop_container` |
+| Q5 | Formatter | **Adopt `ruff`** at 127-char line length, after Phase 6 is complete |
+
+---
+
+### Phase 1 — Documentation restructure ✅ Complete
+
+*Merged on `docs/restructure-and-refresh`.*
+
+- Created [ARCHITECTURE.md](ARCHITECTURE.md) (all 8 modules, runtime model, conventions).
+- Rewrote [CLAUDE.md](CLAUDE.md) as a Claude-focused contributor guide.
+- Added docker-socket-proxy hardening section to README.
+- Added argument-injection `--` note to README and DOCKERHUB.
+- Struck completed items from the architect's priority queue.
+
+---
+
+### Phase 2 — Zero-risk housekeeping
+
+> **Risk:** very low. Pure cleanup, no behavior change. All changes verified against tests. Can be a single branch + PR.
+
+**2a. Add `.dockerignore`** (§3.10)
+
+Create `.dockerignore` excluding `.git`, `.venv`, `data`, `.pytest_cache`, `__pycache__`, `*.pyc`, `tests`, `.env`, `.env.*`. No behavior change — Dockerfile only COPYs specific paths — but speeds up builds and prevents a future `COPY . .` from accidentally shipping secrets.
+
+**2b. Fix `os.makedirs` → `exist_ok=True` in three places** (§4)
+
+- [src/permissions.py:21](src/permissions.py#L21)
+- [src/history.py:28](src/history.py#L28)
+- [src/logging_config.py:29](src/logging_config.py#L29)
+
+All three have a TOCTOU between `os.path.exists(dir)` and `os.makedirs(dir)`. Vanishingly unlikely to hit in practice but idiomatic Python is `exist_ok=True` and removes the check entirely.
+
+**2c. Add cooldown to `!guide`** (§4)
+
+One decorator line. Prevents a non-permissioned user from spamming the bot into Discord rate-limit territory.
+
+**2d. Fix `history.record` spacing** (§2.4)
+
+Five call sites in `bot.py` are missing the space after the first comma. Cosmetic, but consistent code is easier to read/grep. Fix all five to `history.record(HISTORY_FILE, ctx.author, ...)`.
+
+**2e. Remove dead env bootstrapping from `test_unit.py`** (§3.7)
+
+[tests/test_unit.py:6-7](tests/test_unit.py#L6-L7) duplicates what `conftest.py` already does. The conftest version runs first; the test file version is dead code. Remove the two lines.
+
+**2f. Add comment to Dockerfile about the `requests` pin** (§3.5)
+
+Not unpinning yet (docker-py upstream hasn't released a fix), but adding a comment explaining why the pin exists so future maintainers don't just delete it thinking it's stale.
+
+**2g. Complete the missing env vars in `docker-compose.yml`** (§2.2)
+
+*Conditional on Q1 answer.* If not switching to `env_file`, add `HISTORY_FILE`, `COMMAND_COOLDOWN`, `CRASH_CHECK_INTERVAL`, `CRASH_ALERT_CHANNEL_ID` to the existing passthrough list in both compose files.
+
+**2h. Add a note about `c.reload()` calls** (§4)
+
+The architect flagged four `c.reload()` calls immediately after `_find_container_by_name` as redundant (since `containers.get()` fetches fresh state). This is technically correct. However, the `reload()` in `start_container` and `stop_container` exists to ensure the status check reads real-time data before taking action — removing it saves one API call but makes the intent less explicit. **Recommendation:** keep the reloads in the mutation functions (`start_container`, `stop_container`) but add a brief comment; remove the reload in `container_status` which is genuinely redundant since `reload()` is the whole point of that function.
+
+---
+
+### Phase 3 — Security hardening
+
+> **Risk:** low-to-medium. Touches `bot.py`, `api.py`, and `docker_control.py`. Each change is small and testable. Tests will need updates for the `allowed_mentions` change.
+
+**3a. `allowed_mentions` global default** (§1.1) — **highest priority**
+
+Add `allowed_mentions=discord.AllowedMentions.none()` to the `commands.Bot(...)` constructor. Then in `send_announcement`, add `allowed_mentions=discord.AllowedMentions(roles=True)` to the `target_channel.send(content)` call so role pings still work there. Test update: verify the announcement test still asserts a role mention goes through.
+
+**3b. Fix Dockerfile healthcheck** (§1.2)
+
+Add an unauthenticated `GET /healthz` route to [src/api.py](src/api.py) that returns `{"ok": True}` with no auth dependency. Update the `HEALTHCHECK` in `Dockerfile` to hit `/healthz` instead of `/`. This eliminates the restart loop when `STATUS_TOKEN` is set. The compose healthcheck (TCP connect) can stay as-is.
+
+**3c. `secrets.compare_digest` for STATUS_TOKEN** (§1.4)
+
+Replace `token != STATUS_TOKEN` in [src/api.py:28](src/api.py#L28) with `not secrets.compare_digest(token, STATUS_TOKEN)`. Two-line change. Add `import secrets` at the top.
+
+**3d. Sanitize leading `-` in announce messages** (§1.3)
+
+In `_sanitize()` in [src/docker_control.py:161-169](src/docker_control.py#L161-L169), after stripping characters, strip any leading hyphens from the result. This closes the argument-injection vector documented in Phase 1.
+
+**3e. Refactor `announce_in_game` try/except duplication** (§3.8)
+
+Consolidate the two identical try/except blocks into one (as shown in the architect's recommendation). Zero behavior change, easier to maintain. Pair with 3d since we're touching the same function.
+
+**3f. Fix countdown display for sub-60s `SHUTDOWN_DELAY`** (§4)
+
+[src/bot.py:258-259](src/bot.py#L258-L259) shows "0 minutes" when `SHUTDOWN_DELAY` is under 60 seconds (e.g., `10` in the dev compose). Fix: display seconds when delay < 60, minutes otherwise.
+
+**3g. Fix code-block backtick escaping in `!logs` output** (§4)
+
+[src/bot.py:419](src/bot.py#L419) wraps logs in triple-backtick fences. If the log output itself contains ` ``` `, the Discord message breaks. Strip or escape backticks from `output` before wrapping.
+
+---
+
+### Phase 4 — Architecture / event loop
+
+> **Risk:** medium. `main()` change touches startup behavior. Test carefully with an actual bot token before merging. The arg parser fix requires updating tests.
+
+**4a. Rewrite `main()` to use a daemon thread** (§3.1)
+
+Replace the `asyncio.get_event_loop()` + `run_in_executor` pattern with a plain `threading.Thread(target=start_api, daemon=True)`. This is simpler, removes the deprecated call, and makes shutdown behavior explicit (daemon thread dies with the process). The functional behavior is identical but no longer relies on a deprecated API.
+
+**4b. Fix `_delayed_container_op` positional-arg parser** (§3.3)
+
+Rewrite the two-arg parser that identifies `"now"` vs container name using `*args` and list filtering (as shown in §3.3). Covers the `!stop foo bar` silent-overwrite edge case. Requires test updates to cover the new `*args` signature.
+
+**4c. Maintenance mode + pending ops** (§3.9)
+
+*Conditional on Q3 answer.* Either cancel pending ops on `!maintenance on`, or add a sentence to the maintenance handler response and README stating that scheduled countdowns are not affected.
+
+---
+
+### Phase 5 — CI / infrastructure
+
+> **Risk:** low. Workflow changes don't affect runtime. Test locally with `act` or push to a branch and inspect Actions output.
+
+**5a. Eliminate duplicated CI test job** (§3.4)
+
+The test job in [docker-publish.yml](.github/workflows/docker-publish.yml) is a copy of [tests.yaml](.github/workflows/tests.yaml), already diverging (`pytest-cov` missing). Extract a reusable workflow (`tests-reusable.yml` with `on: workflow_call`) that both `tests.yaml` and `docker-publish.yml` call. Single source of truth, one place to update.
+
+**5b. Add `pytest-cov` to `docker-publish.yml`** (§3.4)
+
+*Can be folded into 5a.* Currently the publish pipeline runs tests without coverage. Align with `tests.yaml`.
+
+---
+
+### Phase 6 — Test organization
+
+> **Risk:** very low. Zero behavior change — pure file moves. The only thing that can go wrong is a broken import. Run `pytest` immediately after splitting to confirm.
+
+**6a. Split `test_unit.py` into module files** (§3.6)
+
+Move the 22 test classes into 8 focused files as the architect outlined. Preserve all `import` statements and conftest fixtures (they're already in `conftest.py` and apply globally). Update `CLAUDE.md` test-conventions section to reference the new layout.
+
+---
+
+### Phase 7 — Ruff formatter adoption
+
+> Run after Phase 6 is merged. Single standalone PR — "style only, no logic."
+
+- Install `ruff` and add to `requirements.txt` (dev dependency) or CI inline install.
+- Run `ruff format .` at 127-char line length (matching current flake8 config) — rewrites whitespace/spacing across all src files.
+- Replace the two `flake8` CI steps in `tests.yaml` and `docker-publish.yml` with `ruff check .` (lint) + `ruff format --check .` (format gate).
+- Remove `flake8` from CI install steps; add `ruff` in its place.
+- Update `CLAUDE.md` and `ARCHITECTURE.md` to reference ruff instead of flake8.
+
+### Phase 8 — Remaining strategic items
+
+> Low urgency. Revisit after Phase 7.
+
+| Item | Action |
+|---|---|
+| §3.5 Unpin `requests<2.32.0` | Monitor Dependabot — remove pin when docker-py ships a compatible release |
+| §1.6 `usermod -aG root` entrypoint caveat | Add a note to README hardening section |
+| API integration tests | Add `httpx.AsyncClient` test for `/healthz` + `/status` after Phase 3b lands |
