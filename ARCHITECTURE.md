@@ -34,8 +34,15 @@ src/
   state.py           — BotState singleton (pending_ops, maintenance flags, last_known_status)
 
 tests/
-  conftest.py        — Sets BOT_TOKEN + ALLOWED_CONTAINERS, resets state/permissions cache per test
-  test_unit.py       — All unit tests (unittest classes executed by pytest)
+  conftest.py           — Sets BOT_TOKEN + ALLOWED_CONTAINERS, resets state/permissions cache per test
+  test_config.py        — Config parsing tests
+  test_docker_control.py — Docker SDK wrapper tests (logs, stats, control ops)
+  test_permissions.py   — Permission store tests
+  test_bot_commands.py  — Bot command handler tests (stop/restart/logs/stats/maintenance/history/etc.)
+  test_api.py           — FastAPI /status endpoint tests
+  test_logging.py       — RedactingFilter tests
+  test_crash_alerting.py — Crash detection loop tests
+  test_state.py         — BotState and command history tests
 
 .github/
   dependabot.yml     — Weekly pip, github-actions, docker base image updates (grouped)

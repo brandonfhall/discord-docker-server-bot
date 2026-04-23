@@ -48,7 +48,7 @@ Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`) are set by [tests/conftest.py]
 3. If the command introduces a new permission action, add it to `ALL_ACTIONS` in [src/permissions.py](src/permissions.py) (single source of truth — `bot.py` re-exports it as `VALID_ACTIONS`).
 4. Call `history.record(HISTORY_FILE, ctx.author, "<action>", target)` for auditable actions.
 5. If the command mutates containers, also check `state.is_maintenance_active(...)` and bail with a maintenance message.
-6. Add unit tests in [tests/test_unit.py](tests/test_unit.py). Follow the existing `unittest.IsolatedAsyncioTestCase` patterns with `AsyncMock` for `ctx.send`.
+6. Add unit tests in the matching file under [tests/](tests/) (e.g. a new bot command goes in [tests/test_bot_commands.py](tests/test_bot_commands.py)). Follow the existing `unittest.IsolatedAsyncioTestCase` patterns with `AsyncMock` for `ctx.send`.
 7. Update the Commands table in both [README.md](README.md) and [DOCKERHUB.md](DOCKERHUB.md).
 
 ## Adding a new env var
@@ -59,6 +59,19 @@ Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`) are set by [tests/conftest.py]
 4. If it's a secret, add it to the token list in `setup_logging()`.
 
 ## Test conventions
+
+Tests live in [tests/](tests/) split by concern:
+
+| File | What it covers |
+|---|---|
+| `test_config.py` | `TestConfig`, `TestNewConfig` |
+| `test_docker_control.py` | `TestDockerControl`, `TestDockerControlLogs`, `TestDockerControlStats` |
+| `test_permissions.py` | `TestPermissions` |
+| `test_bot_commands.py` | `TestBotLogic`, `TestPendingOps`, `TestStopNow`, `TestRestartNow`, `TestLogsCommand`, `TestStatsCommand`, `TestMaintenanceMode`, `TestHistoryCommand`, `TestCooldownError`, `TestGuideUpdated` |
+| `test_api.py` | `TestStatusEndpoint` |
+| `test_logging.py` | `TestRedactingFilter` |
+| `test_crash_alerting.py` | `TestCrashAlerting` |
+| `test_state.py` | `TestCancelPending`, `TestCommandHistory` |
 
 - Unit tests mock the Docker SDK; don't introduce tests that require a real Docker daemon.
 - Use `conftest.py` fixtures (`_reset_state`, `_reset_permissions_cache`) — they already run automatically.
