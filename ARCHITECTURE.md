@@ -58,7 +58,9 @@ A single lazily-constructed `_docker_client` is reused for the lifetime of the p
 ### Security
 
 - **Container names** are validated against `^[a-zA-Z0-9_.-]+$` and `ALLOWED_CONTAINERS` before any Docker call. Validation happens inside `docker_control` — not just at the command layer — so the allowlist survives mistakes in the caller.
-- **Announcement messages** pass through `_sanitize()` in [src/docker_control.py](src/docker_control.py), which whitelists `[a-zA-Z0-9 .,!?:_-]` and truncates to 100 chars before any `exec_run`. Do **not** add shell metacharacters, quotes, or `$` to this whitelist without revisiting the injection surface.
+- **Announcement messages** pass through `_sanitize()` in [src/docker_control.py](src/docker_control.py), which whitelists `[a-zA-Z0-9 .,!?:_-]`, strips leading hyphens (to prevent flag injection into downstream commands like `rcon-cli`), and truncates to 100 chars before any `exec_run`. Do **not** add shell metacharacters, quotes, or `$` to this whitelist without revisiting the injection surface.
+- **Ping control:** The bot is constructed with `AllowedMentions.none()` so no handler can accidentally ping @everyone or arbitrary users. `send_announcement` explicitly passes `AllowedMentions(roles=True)` to re-enable only the configured role mention.
+- **Status API token** is compared with `secrets.compare_digest` to prevent timing attacks. The `/healthz` endpoint is intentionally unauthenticated — it is used by the Docker healthcheck and external uptime monitors.
 - **Log redaction** is implemented at the handler level (`_RedactingFilter` in [src/logging_config.py](src/logging_config.py)) so every handler strips `BOT_TOKEN` and `STATUS_TOKEN` — not just the root logger.
 - **Guild lock** (`DISCORD_GUILD_ID`) and **channel lock** (`ALLOWED_CHANNEL_IDS`) are enforced in a global `@bot.check`. Disallowed-channel rejections are silently ignored in `on_command_error` to avoid leaking the bot's presence.
 - **Admin bypass:** Discord's `Administrator` permission always short-circuits `has_permission` checks.
