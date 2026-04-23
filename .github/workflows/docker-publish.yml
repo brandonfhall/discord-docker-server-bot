@@ -76,6 +76,7 @@ jobs:
     needs: build-and-push
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
+    permissions: {}
     steps:
       - name: Prune old tags
         env:
