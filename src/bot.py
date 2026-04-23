@@ -10,10 +10,19 @@ from discord.ext import commands, tasks
 from . import docker_control, history, permissions
 from .api import start_api
 from .config import (
-    BOT_TOKEN, STATUS_TOKEN, SHUTDOWN_DELAY, ALLOWED_CONTAINERS,
-    DISCORD_GUILD_ID, LOG_FILE, ANNOUNCE_CHANNEL_ID, ANNOUNCE_ROLE_ID,
-    ALLOWED_CHANNEL_IDS, COMMAND_COOLDOWN, CRASH_CHECK_INTERVAL,
-    CRASH_ALERT_CHANNEL_ID, HISTORY_FILE
+    BOT_TOKEN,
+    STATUS_TOKEN,
+    SHUTDOWN_DELAY,
+    ALLOWED_CONTAINERS,
+    DISCORD_GUILD_ID,
+    LOG_FILE,
+    ANNOUNCE_CHANNEL_ID,
+    ANNOUNCE_ROLE_ID,
+    ALLOWED_CHANNEL_IDS,
+    COMMAND_COOLDOWN,
+    CRASH_CHECK_INTERVAL,
+    CRASH_ALERT_CHANNEL_ID,
+    HISTORY_FILE,
 )
 from .logging_config import setup_logging
 from .state import state
@@ -199,8 +208,6 @@ async def _before_crash_check():
             pass
 
 
-
-
 @bot.command()
 @has_permission("start")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
@@ -228,8 +235,7 @@ def _format_delay(seconds: int) -> str:
     return f"{minutes} minute{'s' if minutes != 1 else ''}"
 
 
-async def _delayed_container_op(ctx, *args, action, now_action, docker_func,
-                                immediate_msg, countdown_msg_tpl):
+async def _delayed_container_op(ctx, *args, action, now_action, docker_func, immediate_msg, countdown_msg_tpl):
     """Shared logic for stop and restart commands with optional 'now' flag."""
     if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
         await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
@@ -296,7 +302,8 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func,
 async def stop(ctx, *args):
     """Stops the container. Use '!stop now' for immediate shutdown (requires stop_now permission)."""
     await _delayed_container_op(
-        ctx, *args,
+        ctx,
+        *args,
         action="stop",
         now_action="stop_now",
         docker_func=docker_control.stop_container,
@@ -311,7 +318,8 @@ async def stop(ctx, *args):
 async def restart(ctx, *args):
     """Restarts the container (with countdown). Use '!restart now' for immediate restart (requires restart_now permission)."""
     await _delayed_container_op(
-        ctx, *args,
+        ctx,
+        *args,
         action="restart",
         now_action="restart_now",
         docker_func=docker_control.restart_container,
@@ -396,7 +404,7 @@ async def guide(ctx):
         "`!maintenance on/off [reason]` : Toggle maintenance mode",
         "`!perm list`   : List allowed roles",
         "`!perm add`    : Add role to action",
-        "`!perm remove` : Remove role from action"
+        "`!perm remove` : Remove role from action",
     ]
     logging.info(f"User {ctx.author} requested GUIDE")
     await ctx.send("\n".join(lines))
@@ -504,7 +512,9 @@ async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
     """Toggle maintenance mode. Usage: !maintenance on/off [reason]"""
     if toggle is None:
         status = "ON" if state.maintenance_mode else "OFF"
-        await ctx.send(f"Maintenance mode is **{status}**." + (f" Reason: {state.maintenance_reason}" if state.maintenance_reason else ""))
+        await ctx.send(
+            f"Maintenance mode is **{status}**." + (f" Reason: {state.maintenance_reason}" if state.maintenance_reason else "")
+        )
         return
     toggle = toggle.lower()
     if toggle == "on":
@@ -572,7 +582,10 @@ async def perm_list(ctx):
 
 @perm.error
 async def perm_error(ctx, error):
-    logging.warning(f"Perm command error: {error} (Command: {ctx.command}, Subcommand: {ctx.invoked_subcommand}, Passed: {ctx.subcommand_passed})")
+    logging.warning(
+        f"Perm command error: {error} "
+        f"(Command: {ctx.command}, Subcommand: {ctx.invoked_subcommand}, Passed: {ctx.subcommand_passed})"
+    )
     if isinstance(error, commands.MissingRequiredArgument):
         # Check which subcommand was attempted.
         # If argument parsing fails, invoked_subcommand is often None, but subcommand_passed is set.

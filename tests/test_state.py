@@ -1,13 +1,7 @@
-import asyncio
-import json
-import logging
 import os
-import sys
 import unittest
-from io import StringIO
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
-from src import docker_control, permissions
 from src.state import state
 
 
@@ -41,9 +35,9 @@ class TestCancelPending(unittest.TestCase):
 
 
 class TestCommandHistory(unittest.TestCase):
-
     def setUp(self):
         from src import history
+
         self.history = history
         self.test_file = "test_history.json"
 
@@ -74,4 +68,3 @@ class TestCommandHistory(unittest.TestCase):
             f.write("not json{{{")
         entries = self.history.load(self.test_file)
         self.assertEqual(entries, [])
-

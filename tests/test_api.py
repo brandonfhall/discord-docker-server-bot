@@ -1,14 +1,5 @@
-import asyncio
-import json
-import logging
-import os
-import sys
 import unittest
-from io import StringIO
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
-
-from src import docker_control, permissions
-from src.state import state
+from unittest.mock import patch
 
 
 class TestStatusEndpoint(unittest.TestCase):
@@ -17,6 +8,7 @@ class TestStatusEndpoint(unittest.TestCase):
     def test_status_returns_expected_structure(self):
         from fastapi.testclient import TestClient
         from src import api as api_module
+
         with patch.object(api_module, "STATUS_TOKEN", None):
             with patch.object(api_module, "ALLOWED_CONTAINERS", ["test_container"]):
                 with patch("src.api.docker_control.container_status", return_value="running"):
@@ -34,6 +26,7 @@ class TestStatusEndpoint(unittest.TestCase):
     def test_status_requires_token_when_configured(self):
         from fastapi.testclient import TestClient
         from src import api as api_module
+
         with patch.object(api_module, "STATUS_TOKEN", "secret"):
             client = TestClient(api_module.app)
             response = client.get("/status")
@@ -42,6 +35,7 @@ class TestStatusEndpoint(unittest.TestCase):
     def test_status_accepts_token_via_header(self):
         from fastapi.testclient import TestClient
         from src import api as api_module
+
         with patch.object(api_module, "STATUS_TOKEN", "secret"):
             with patch.object(api_module, "ALLOWED_CONTAINERS", ["test_container"]):
                 with patch("src.api.docker_control.container_status", return_value="running"):
@@ -53,6 +47,7 @@ class TestStatusEndpoint(unittest.TestCase):
     def test_status_accepts_token_via_query_param(self):
         from fastapi.testclient import TestClient
         from src import api as api_module
+
         with patch.object(api_module, "STATUS_TOKEN", "secret"):
             with patch.object(api_module, "ALLOWED_CONTAINERS", ["test_container"]):
                 with patch("src.api.docker_control.container_status", return_value="running"):
@@ -60,4 +55,3 @@ class TestStatusEndpoint(unittest.TestCase):
                         client = TestClient(api_module.app)
                         response = client.get("/status?token=secret")
         self.assertEqual(response.status_code, 200)
-

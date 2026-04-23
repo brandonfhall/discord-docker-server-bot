@@ -1,14 +1,5 @@
-import asyncio
-import json
 import logging
-import os
-import sys
 import unittest
-from io import StringIO
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
-
-from src import docker_control, permissions
-from src.state import state
 
 
 class TestRedactingFilter(unittest.TestCase):
@@ -16,6 +7,7 @@ class TestRedactingFilter(unittest.TestCase):
 
     def setUp(self):
         from src.logging_config import RedactingFilter
+
         self._RedactingFilter = RedactingFilter
 
     def _make_record(self, msg, args=()):
@@ -66,4 +58,3 @@ class TestRedactingFilter(unittest.TestCase):
         record = self._make_record("message stays unchanged")
         f.filter(record)
         self.assertEqual(record.msg, "message stays unchanged")
-

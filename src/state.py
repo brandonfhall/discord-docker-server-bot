@@ -31,8 +31,13 @@ class BotState:
     def is_maintenance_active(self, command_name: str) -> bool:
         """Return True if maintenance mode blocks the given command."""
         exempt = {
-            "maintenance", "perm", "perm add", "perm remove",
-            "perm list", "guide", "history",
+            "maintenance",
+            "perm",
+            "perm add",
+            "perm remove",
+            "perm list",
+            "guide",
+            "history",
         }
         if command_name in exempt:
             return False

@@ -11,7 +11,11 @@ from fastapi.responses import RedirectResponse
 
 from . import docker_control, permissions
 from .config import (
-    STATUS_TOKEN, STATUS_PORT, ALLOWED_CONTAINERS, LOG_FILE, BOT_TOKEN,
+    STATUS_TOKEN,
+    STATUS_PORT,
+    ALLOWED_CONTAINERS,
+    LOG_FILE,
+    BOT_TOKEN,
 )
 
 app = FastAPI()

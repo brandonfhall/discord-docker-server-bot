@@ -1,14 +1,7 @@
-import asyncio
-import json
-import logging
 import os
-import sys
 import unittest
 from io import StringIO
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
-
-from src import docker_control, permissions
-from src.state import state
+from unittest.mock import patch
 
 
 class TestConfig(unittest.TestCase):
@@ -16,6 +9,7 @@ class TestConfig(unittest.TestCase):
 
     def setUp(self):
         from src import config
+
         self.config = config
 
     # --- _int_env ---
@@ -71,19 +65,20 @@ class TestConfig(unittest.TestCase):
 
 
 class TestNewConfig(unittest.TestCase):
-
     def test_command_cooldown_has_default(self):
         from src import config
+
         self.assertIsInstance(config.COMMAND_COOLDOWN, int)
         self.assertGreater(config.COMMAND_COOLDOWN, 0)
 
     def test_crash_check_interval_has_default(self):
         from src import config
+
         self.assertIsInstance(config.CRASH_CHECK_INTERVAL, int)
         self.assertGreater(config.CRASH_CHECK_INTERVAL, 0)
 
     def test_history_file_has_default(self):
         from src import config
+
         self.assertIsInstance(config.HISTORY_FILE, str)
         self.assertTrue(config.HISTORY_FILE.endswith(".json"))
-

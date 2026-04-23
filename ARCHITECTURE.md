@@ -15,7 +15,7 @@ A single-process Python service that bridges Discord commands to the Docker daem
 | Docker control | `docker` SDK for Python |
 | Config | `python-dotenv` + env vars |
 | Tests | `unittest` (stdlib) run via `pytest` |
-| Lint | `flake8` (see [.flake8](.flake8)) |
+| Lint / format | `ruff` (see [pyproject.toml](pyproject.toml)) |
 | Static analysis | CodeQL (Python + Actions) |
 
 Pinned versions live in [requirements.txt](requirements.txt); Python is pinned to **3.11** in both the Dockerfile and CI.

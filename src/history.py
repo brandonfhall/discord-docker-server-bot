@@ -1,7 +1,6 @@
 """Command history / audit log with thread-safe file I/O."""
 
 import json
-import logging
 import os
 import threading
 from datetime import datetime, timezone
@@ -35,10 +34,12 @@ def record(history_file: str, user, command: str, container: str = ""):
     """Append a command entry to the history file. Thread-safe."""
     with _lock:
         entries = load(history_file)
-        entries.append({
-            "timestamp": datetime.now(timezone.utc).isoformat(),
-            "user": str(user),
-            "command": command,
-            "container": container,
-        })
+        entries.append(
+            {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "user": str(user),
+                "command": command,
+                "container": container,
+            }
+        )
         save(history_file, entries)

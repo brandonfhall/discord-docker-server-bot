@@ -1,20 +1,15 @@
 import asyncio
-import json
-import logging
-import os
-import sys
 import unittest
-from io import StringIO
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
-from src import docker_control, permissions
+from src import docker_control
 from src.state import state
 
 
 class TestBotLogic(unittest.IsolatedAsyncioTestCase):
-
     async def test_resolve_container_allowed(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
@@ -22,6 +17,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_resolve_container_multiple_no_name(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
@@ -31,6 +27,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_resolve_container_single_no_name(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
@@ -38,6 +35,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_resolve_container_disallowed(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["allowed"]):
@@ -48,6 +46,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     def test_root_redirects_to_status(self):
         from fastapi.testclient import TestClient
         from src.api import app
+
         client = TestClient(app)
         response = client.get("/", follow_redirects=False)
         self.assertEqual(response.status_code, 307)
@@ -55,6 +54,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_verify_token_no_token_configured(self):
         from src import api as api_module
+
         original = api_module.STATUS_TOKEN
         try:
             api_module.STATUS_TOKEN = None
@@ -64,6 +64,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_verify_token_correct_header(self):
         from src import api as api_module
+
         original = api_module.STATUS_TOKEN
         try:
             api_module.STATUS_TOKEN = "secret123"
@@ -73,6 +74,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_verify_token_correct_query_param(self):
         from src import api as api_module
+
         original = api_module.STATUS_TOKEN
         try:
             api_module.STATUS_TOKEN = "secret123"
@@ -83,6 +85,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     async def test_verify_token_wrong_token_rejected(self):
         from src import api as api_module
         from fastapi import HTTPException
+
         original = api_module.STATUS_TOKEN
         try:
             api_module.STATUS_TOKEN = "secret123"
@@ -93,6 +96,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_announcement_no_config(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.channel = MagicMock()
         ctx.channel.id = 100
@@ -104,6 +108,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_announcement_with_role_mention(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.channel = MagicMock()
         ctx.channel.id = 100
@@ -117,6 +122,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_announcement_send_failure_is_logged(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.channel = MagicMock()
         ctx.channel.id = 100
@@ -128,6 +134,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_guild_no_restrictions(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.guild = MagicMock()
         ctx.guild.id = 1
@@ -138,6 +145,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_guild_wrong_guild(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.guild = MagicMock()
         ctx.guild.id = 999
@@ -146,6 +154,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_guild_wrong_channel(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.guild = None
         ctx.channel.id = 456
@@ -155,6 +164,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_perm_add_rejects_invalid_action(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         await bot_module.perm_add.callback(ctx, "invalid_action", role_name="SomeRole")
@@ -163,6 +173,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_perm_remove_rejects_invalid_action(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         await bot_module.perm_remove.callback(ctx, "bad_action", role_name="SomeRole")
@@ -171,18 +182,32 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_valid_actions_constant_complete(self):
         from src import bot as bot_module
-        for action in ("start", "stop", "stop_now", "restart", "restart_now", "announce",
-                        "logs", "stats", "maintenance", "history"):
+
+        for action in (
+            "start",
+            "stop",
+            "stop_now",
+            "restart",
+            "restart_now",
+            "announce",
+            "logs",
+            "stats",
+            "maintenance",
+            "history",
+        ):
             self.assertIn(action, bot_module.VALID_ACTIONS)
 
     # --- start command ---
 
     async def test_start_command(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
-            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "started"))):
+            with patch(
+                "src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "started"))
+            ):
                 await bot_module.start.callback(ctx, container_name=None)
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("Starting" in c for c in calls))
@@ -190,6 +215,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_start_command_disallowed_container(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
@@ -200,6 +226,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_restart_command_normal_path(self):
         from src import bot as bot_module
+
         state.pending_ops.clear()
         state.maintenance_mode = False
         ctx = MagicMock()
@@ -215,7 +242,9 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))):
+                    with patch(
+                        "src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))
+                    ):
                         with patch.object(bot_module.bot, "loop", mock_loop):
                             await bot_module.restart.callback(ctx)
 
@@ -228,6 +257,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_status_command(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
@@ -240,16 +270,21 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_announce_command_single_container(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
-            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok: Message sent"))):
+            with patch(
+                "src.bot.docker_control.run_blocking",
+                new=AsyncMock(return_value=docker_control.Result(True, "ok: Message sent")),
+            ):
                 await bot_module.announce.callback(ctx, arg1="Hello world", arg2=None)
         ctx.send.assert_called_once()
         self.assertIn("ok", ctx.send.call_args[0][0])
 
     async def test_announce_command_multi_container_with_name(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
@@ -260,6 +295,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_announce_command_no_target_shows_usage(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
@@ -271,6 +307,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_guide_command(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         await bot_module.guide.callback(ctx)
@@ -283,6 +320,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_perm_add_valid_action(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.author = MagicMock()
@@ -293,6 +331,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_perm_remove_valid_action(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.author = MagicMock()
@@ -303,6 +342,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_perm_list(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch("src.bot.permissions.list_permissions", return_value={"start": ["Admin"], "stop": ["Admin"]}):
@@ -317,6 +357,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     async def test_announce_error_missing_arg(self):
         from src import bot as bot_module
         from discord.ext import commands
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         error = commands.MissingRequiredArgument(MagicMock())
@@ -328,6 +369,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_perm_no_subcommand(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.invoked_subcommand = None
@@ -339,6 +381,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_has_permission_admin_bypasses(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.author.guild_permissions.administrator = True
         predicate = bot_module.has_permission("start")
@@ -347,6 +390,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_has_permission_checks_role(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.author.guild_permissions.administrator = False
         predicate = bot_module.has_permission("start")
@@ -357,6 +401,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_guild_passes_all_checks(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.guild = MagicMock()
         ctx.guild.id = 42
@@ -367,6 +412,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_check_guild_dm_with_guild_restriction(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.guild = None  # DM has no guild
         with patch.object(bot_module, "DISCORD_GUILD_ID", 42):
@@ -376,6 +422,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_resolve_container_empty_list(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", []):
@@ -388,6 +435,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_announcement_to_configured_channel(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.channel = MagicMock()
         ctx.channel.id = 100
@@ -410,6 +458,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_send_announcement_channel_not_found_falls_back(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.channel = MagicMock()
         ctx.channel.id = 100
@@ -428,6 +477,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     async def test_on_command_error_missing_arg_perm_add(self):
         from src import bot as bot_module
         from discord.ext import commands
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.command = MagicMock()
@@ -440,6 +490,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     async def test_on_command_error_missing_arg_perm_remove(self):
         from src import bot as bot_module
         from discord.ext import commands
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.command = MagicMock()
@@ -452,6 +503,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     async def test_on_command_error_missing_arg_perm_generic(self):
         from src import bot as bot_module
         from discord.ext import commands
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.command = MagicMock()
@@ -464,6 +516,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     async def test_on_command_error_missing_arg_other_command(self):
         from src import bot as bot_module
         from discord.ext import commands
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.command = MagicMock()
@@ -478,6 +531,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     async def test_on_command_error_command_not_found_perm_admin_gets_usage(self):
         from src import bot as bot_module
         from discord.ext import commands
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.message.content = "!perm badsubcmd"
@@ -491,6 +545,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     async def test_on_command_error_command_not_found_perm_non_admin_silent(self):
         from src import bot as bot_module
         from discord.ext import commands
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.message.content = "!perm badsubcmd"
@@ -503,6 +558,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     async def test_on_command_error_command_not_found_other_silent(self):
         from src import bot as bot_module
         from discord.ext import commands
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.message.content = "!unknowncmd"
@@ -513,6 +569,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_on_command_error_unexpected_error_is_logged(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         error = RuntimeError("something broke")
@@ -524,6 +581,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         """CheckFailure from a disallowed channel should produce no response."""
         from src import bot as bot_module
         from discord.ext import commands
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.channel.id = 999
@@ -537,6 +595,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         """CheckFailure from an allowed channel (role denied) should still respond."""
         from src import bot as bot_module
         from discord.ext import commands
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.channel.id = 100
@@ -554,6 +613,7 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         from src import bot as bot_module
+
         self.bot_module = bot_module
         state.pending_ops.clear()
         state.maintenance_mode = False
@@ -619,7 +679,9 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))):
+                    with patch(
+                        "src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))
+                    ):
                         with patch.object(bot_module.bot, "loop", mock_loop):
                             await bot_module.stop.callback(ctx, "test_container")
 
@@ -655,7 +717,9 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))):
+                    with patch(
+                        "src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))
+                    ):
                         with patch.object(bot_module.bot, "loop", mock_loop):
                             await bot_module.stop.callback(ctx1, "test_container")
                             await bot_module.stop.callback(ctx2, "test_container")
@@ -669,6 +733,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
 
     def setUp(self):
         from src import bot as bot_module
+
         self.bot_module = bot_module
         state.pending_ops.clear()
         state.maintenance_mode = False
@@ -692,7 +757,10 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
+                    with patch(
+                        "src.bot.docker_control.run_blocking",
+                        new=AsyncMock(return_value=docker_control.Result(True, "stopped")),
+                    ):
                         await bot_module.stop.callback(ctx, "now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -710,6 +778,7 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         ctx.author.guild_permissions.administrator = True
 
         run_blocking_calls = []
+
         async def mock_run_blocking(func, *args, **kwargs):
             run_blocking_calls.append((func.__name__, args))
             if func.__name__ == "stop_container":
@@ -744,7 +813,10 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
+                    with patch(
+                        "src.bot.docker_control.run_blocking",
+                        new=AsyncMock(return_value=docker_control.Result(True, "stopped")),
+                    ):
                         await bot_module.stop.callback(ctx, "server1", "now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -763,7 +835,10 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
+                    with patch(
+                        "src.bot.docker_control.run_blocking",
+                        new=AsyncMock(return_value=docker_control.Result(True, "stopped")),
+                    ):
                         await bot_module.stop.callback(ctx, "now", "server1")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -797,7 +872,10 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.permissions.is_member_allowed", return_value=True) as mock_perm:
-                        with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
+                        with patch(
+                            "src.bot.docker_control.run_blocking",
+                            new=AsyncMock(return_value=docker_control.Result(True, "stopped")),
+                        ):
                             await bot_module.stop.callback(ctx, "now")
 
         mock_perm.assert_called_once_with("stop_now", ctx.author)
@@ -821,7 +899,10 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
+                    with patch(
+                        "src.bot.docker_control.run_blocking",
+                        new=AsyncMock(return_value=docker_control.Result(True, "stopped")),
+                    ):
                         await bot_module.stop.callback(ctx, "now")
 
         pending_task.cancel.assert_called_once()
@@ -843,7 +924,9 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))):
+                    with patch(
+                        "src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))
+                    ):
                         with patch.object(bot_module.bot, "loop", mock_loop):
                             await bot_module.stop.callback(ctx)
 
@@ -864,7 +947,10 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
             with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
                 with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                     with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                        with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "stopped"))):
+                        with patch(
+                            "src.bot.docker_control.run_blocking",
+                            new=AsyncMock(return_value=docker_control.Result(True, "stopped")),
+                        ):
                             await bot_module.stop.callback(ctx, variant)
 
             calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -898,13 +984,13 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
 
 
 class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
-
     def setUp(self):
-        from src import bot as bot_module
+
         state.maintenance_mode = False
 
     async def test_logs_blocked_during_maintenance(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         state.maintenance_mode = True
@@ -916,6 +1002,7 @@ class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
 
     async def test_logs_command_returns_output(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
@@ -926,6 +1013,7 @@ class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
 
     async def test_logs_command_with_line_count(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
@@ -936,6 +1024,7 @@ class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
 
     async def test_logs_command_no_output(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
@@ -945,6 +1034,7 @@ class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
 
     async def test_logs_command_empty_output(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
@@ -954,13 +1044,13 @@ class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
 
 
 class TestStatsCommand(unittest.IsolatedAsyncioTestCase):
-
     def setUp(self):
-        from src import bot as bot_module
+
         state.maintenance_mode = False
 
     async def test_stats_blocked_during_maintenance(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         state.maintenance_mode = True
@@ -972,15 +1062,19 @@ class TestStatsCommand(unittest.IsolatedAsyncioTestCase):
 
     async def test_stats_command_error_field(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
-            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value={"status": "running", "error": "timeout"})):
+            with patch(
+                "src.bot.docker_control.run_blocking", new=AsyncMock(return_value={"status": "running", "error": "timeout"})
+            ):
                 await bot_module.stats_cmd.callback(ctx, container_name=None)
         self.assertIn("Error", ctx.send.call_args[0][0])
 
     async def test_stats_command_running(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         stats_data = {
@@ -999,6 +1093,7 @@ class TestStatsCommand(unittest.IsolatedAsyncioTestCase):
 
     async def test_stats_command_not_running(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
@@ -1008,6 +1103,7 @@ class TestStatsCommand(unittest.IsolatedAsyncioTestCase):
 
     async def test_stats_command_none(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
@@ -1017,9 +1113,9 @@ class TestStatsCommand(unittest.IsolatedAsyncioTestCase):
 
 
 class TestRestartNow(unittest.IsolatedAsyncioTestCase):
-
     def setUp(self):
         from src import bot as bot_module
+
         self.bot_module = bot_module
         state.pending_ops.clear()
         state.maintenance_mode = False
@@ -1042,7 +1138,10 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "restarted"))):
+                    with patch(
+                        "src.bot.docker_control.run_blocking",
+                        new=AsyncMock(return_value=docker_control.Result(True, "restarted")),
+                    ):
                         await bot_module.restart.callback(ctx, "now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -1078,7 +1177,10 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "restarted"))):
+                    with patch(
+                        "src.bot.docker_control.run_blocking",
+                        new=AsyncMock(return_value=docker_control.Result(True, "restarted")),
+                    ):
                         await bot_module.restart.callback(ctx, "now")
 
         pending_task.cancel.assert_called_once()
@@ -1095,7 +1197,10 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "restarted"))):
+                    with patch(
+                        "src.bot.docker_control.run_blocking",
+                        new=AsyncMock(return_value=docker_control.Result(True, "restarted")),
+                    ):
                         await bot_module.restart.callback(ctx, "server1", "now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -1103,9 +1208,9 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
 
 
 class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
-
     def setUp(self):
         from src import bot as bot_module
+
         self.bot_module = bot_module
         state.maintenance_mode = False
         state.maintenance_reason = ""
@@ -1208,9 +1313,9 @@ class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
 
 
 class TestHistoryCommand(unittest.IsolatedAsyncioTestCase):
-
     def setUp(self):
         from src import bot as bot_module
+
         self.bot_module = bot_module
 
     async def test_history_command_empty(self):
@@ -1236,10 +1341,10 @@ class TestHistoryCommand(unittest.IsolatedAsyncioTestCase):
 
 
 class TestCooldownError(unittest.IsolatedAsyncioTestCase):
-
     async def test_cooldown_error_sends_message(self):
         from src import bot as bot_module
         from discord.ext import commands
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.channel.id = 100
@@ -1250,9 +1355,9 @@ class TestCooldownError(unittest.IsolatedAsyncioTestCase):
 
 
 class TestGuideUpdated(unittest.IsolatedAsyncioTestCase):
-
     async def test_guide_shows_new_commands(self):
         from src import bot as bot_module
+
         ctx = MagicMock()
         ctx.send = AsyncMock()
         await bot_module.guide.callback(ctx)
@@ -1262,4 +1367,3 @@ class TestGuideUpdated(unittest.IsolatedAsyncioTestCase):
         self.assertIn("!history", output)
         self.assertIn("!maintenance", output)
         self.assertIn("!restart now", output)
-

@@ -1,18 +1,10 @@
-import asyncio
-import json
-import logging
-import os
-import sys
 import unittest
-from io import StringIO
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, patch
 
-from src import docker_control, permissions
-from src.state import state
+from src import docker_control
 
 
 class TestDockerControl(unittest.TestCase):
-
     def setUp(self):
         docker_control._docker_client = None
 
@@ -54,6 +46,7 @@ class TestDockerControl(unittest.TestCase):
 
     def test_find_container_not_found_returns_none(self):
         import docker
+
         mock_client = MagicMock()
         mock_client.containers.get.side_effect = docker.errors.NotFound("not found", MagicMock())
         result = docker_control._find_container_by_name(mock_client, "missing")
@@ -180,7 +173,6 @@ class TestDockerControl(unittest.TestCase):
 
 
 class TestDockerControlLogs(unittest.TestCase):
-
     def setUp(self):
         docker_control._docker_client = None
 
@@ -216,7 +208,6 @@ class TestDockerControlLogs(unittest.TestCase):
 
 
 class TestDockerControlStats(unittest.TestCase):
-
     def setUp(self):
         docker_control._docker_client = None
 
@@ -280,4 +271,3 @@ class TestDockerControlStats(unittest.TestCase):
             result = docker_control.container_stats("my_game_server")
         self.assertEqual(result["status"], "running")
         self.assertIn("error", result)
-

@@ -4,22 +4,24 @@ import re
 from concurrent.futures import ThreadPoolExecutor
 from typing import NamedTuple, Optional
 
-
-class Result(NamedTuple):
-    """Structured result from Docker operations (start, stop, restart, announce)."""
-    success: bool
-    message: str
-
 import docker
 
 from .config import ALLOWED_CONTAINERS, CONTAINER_MESSAGE_CMD, DOCKER_MAX_WORKERS
 
+
+class Result(NamedTuple):
+    """Structured result from Docker operations (start, stop, restart, announce)."""
+
+    success: bool
+    message: str
+
+
 _executor = ThreadPoolExecutor(max_workers=DOCKER_MAX_WORKERS)
 
 # Validate container names: alphanumeric, underscore, dot, hyphen only
-_VALID_CONTAINER_NAME = re.compile(r'^[a-zA-Z0-9_.-]+$')
+_VALID_CONTAINER_NAME = re.compile(r"^[a-zA-Z0-9_.-]+$")
 # Validate messages: Allow alphanumeric, spaces, and basic punctuation only
-_VALID_MSG_CHARS = re.compile(r'[^a-zA-Z0-9 .,!?:_\-]')
+_VALID_MSG_CHARS = re.compile(r"[^a-zA-Z0-9 .,!?:_\-]")
 
 
 def _validate_container_name(name: str) -> bool:
@@ -164,9 +166,9 @@ def _sanitize(msg: str) -> str:
     # 1. Truncate to 100 chars to prevent buffer issues
     s = msg[:100]
     # 2. Whitelist only safe characters — removes all shell metacharacters/quotes
-    s = _VALID_MSG_CHARS.sub('', s)
+    s = _VALID_MSG_CHARS.sub("", s)
     # 3. Strip leading hyphens to prevent argument injection (e.g. --help, -n)
-    s = s.lstrip('-')
+    s = s.lstrip("-")
     return s.strip()
 
 
@@ -186,7 +188,7 @@ def announce_in_game(name: str, message: str) -> Result:
 
     try:
         res = c.exec_run(cmd)
-        out = res.output.decode('utf-8').strip()
+        out = res.output.decode("utf-8").strip()
         if res.exit_code != 0:
             return Result(False, f"error ({res.exit_code}): {out}")
         return Result(True, f"ok: {out}" if out else "ok")

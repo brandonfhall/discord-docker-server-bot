@@ -1,20 +1,13 @@
-import asyncio
-import json
-import logging
-import os
-import sys
 import unittest
-from io import StringIO
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
-from src import docker_control, permissions
 from src.state import state
 
 
 class TestCrashAlerting(unittest.IsolatedAsyncioTestCase):
-
     def setUp(self):
         from src import bot as bot_module
+
         self.bot_module = bot_module
         state.last_known_status.clear()
 
@@ -76,4 +69,3 @@ class TestCrashAlerting(unittest.IsolatedAsyncioTestCase):
 
         mock_get.assert_called_with(456)
         mock_channel.send.assert_called_once()
-

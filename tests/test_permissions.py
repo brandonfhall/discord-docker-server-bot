@@ -1,18 +1,12 @@
-import asyncio
 import json
-import logging
 import os
-import sys
 import unittest
-from io import StringIO
-from unittest.mock import ANY, AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
-from src import docker_control, permissions
-from src.state import state
+from src import permissions
 
 
 class TestPermissions(unittest.TestCase):
-
     def setUp(self):
         self.test_file = "test_permissions.json"
         self.original_file = permissions.PERMISSIONS_FILE
@@ -78,7 +72,18 @@ class TestPermissions(unittest.TestCase):
         if os.path.exists(self.test_file):
             os.remove(self.test_file)
         data = permissions.list_permissions()
-        for action in ("start", "stop", "stop_now", "restart", "restart_now", "announce", "logs", "stats", "maintenance", "history"):
+        for action in (
+            "start",
+            "stop",
+            "stop_now",
+            "restart",
+            "restart_now",
+            "announce",
+            "logs",
+            "stats",
+            "maintenance",
+            "history",
+        ):
             self.assertIn(action, data)
 
     def test_load_backfills_missing_actions(self):
@@ -107,5 +112,5 @@ class TestPermissions(unittest.TestCase):
     def test_expected_actions_matches_valid_actions(self):
         """VALID_ACTIONS in bot.py must be the same object as ALL_ACTIONS in permissions.py."""
         from src import bot as bot_module
-        self.assertIs(bot_module.VALID_ACTIONS, permissions.ALL_ACTIONS)
 
+        self.assertIs(bot_module.VALID_ACTIONS, permissions.ALL_ACTIONS)

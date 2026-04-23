@@ -18,9 +18,12 @@ PYTHONPATH=. pytest -v tests/
 # Coverage report (matches CI)
 PYTHONPATH=. pytest -v --cov=src --cov-report=term-missing tests/
 
-# Lint (matches CI)
-flake8 . --count --select=E9,F63,F7,F82 --show-source --statistics
-flake8 . --count --exit-zero --max-complexity=10 --max-line-length=127 --statistics
+# Lint + format check (matches CI)
+ruff check .
+ruff format --check .
+
+# Auto-fix lint issues and apply formatting
+ruff check --fix . && ruff format .
 
 # Local dev with live source mount
 docker compose -f docker-compose.dev.yml up --build
@@ -79,7 +82,7 @@ Tests live in [tests/](tests/) split by concern:
 
 ## What to check before claiming done
 
-- `flake8` is clean on the two CI invocations above.
+- `ruff check .` is clean and `ruff format --check .` passes.
 - `pytest` passes with no new warnings.
 - If you touched command surface or env vars, both [README.md](README.md) and [DOCKERHUB.md](DOCKERHUB.md) reflect the change.
 - If you touched architecture or conventions, update [ARCHITECTURE.md](ARCHITECTURE.md) too.
