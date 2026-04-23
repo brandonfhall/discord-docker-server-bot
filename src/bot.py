@@ -27,7 +27,11 @@ intents.message_content = True
 intents.guilds = True
 intents.members = True
 
-bot = commands.Bot(command_prefix="!", intents=intents)
+bot = commands.Bot(
+    command_prefix="!",
+    intents=intents,
+    allowed_mentions=discord.AllowedMentions.none(),
+)
 
 
 @bot.check
@@ -85,7 +89,10 @@ async def send_announcement(ctx, message: str):
             logging.warning(f"Configured ANNOUNCE_CHANNEL_ID {ANNOUNCE_CHANNEL_ID} not found.")
 
     try:
-        await target_channel.send(content)
+        await target_channel.send(
+            content,
+            allowed_mentions=discord.AllowedMentions(roles=True),
+        )
     except Exception as e:
         logging.error(f"Failed to send announcement to {target_channel}: {e}", exc_info=True)
         return
@@ -212,6 +219,14 @@ async def start(ctx, container_name: str = None):
     await ctx.send(res.message)
 
 
+def _format_delay(seconds: int) -> str:
+    """Return a human-readable delay string (e.g. '5 minutes', '30 seconds')."""
+    if seconds < 60:
+        return f"{seconds} second{'s' if seconds != 1 else ''}"
+    minutes = seconds // 60
+    return f"{minutes} minute{'s' if minutes != 1 else ''}"
+
+
 async def _delayed_container_op(ctx, arg1, arg2, *, action, now_action, docker_func,
                                 immediate_msg, countdown_msg_tpl):
     """Shared logic for stop and restart commands with optional 'now' flag."""
@@ -255,8 +270,9 @@ async def _delayed_container_op(ctx, arg1, arg2, *, action, now_action, docker_f
     history.record(HISTORY_FILE, ctx.author, action, target)
     state.pending_ops[target] = bot.loop.create_future()
 
-    countdown_msg = countdown_msg_tpl.format(minutes=SHUTDOWN_DELAY // 60)
-    await ctx.send(f"Server {target} will {action} in {SHUTDOWN_DELAY // 60} minutes (countdown started).")
+    delay_str = _format_delay(SHUTDOWN_DELAY)
+    countdown_msg = countdown_msg_tpl.format(delay=delay_str)
+    await ctx.send(f"Server {target} will {action} in {delay_str} (countdown started).")
     await send_announcement(ctx, countdown_msg)
     await docker_control.run_blocking(docker_control.announce_in_game, target, countdown_msg)
 
@@ -288,7 +304,7 @@ async def stop(ctx, arg1: str = None, arg2: str = None):
         now_action="stop_now",
         docker_func=docker_control.stop_container,
         immediate_msg="Server is shutting down NOW. Please disconnect immediately.",
-        countdown_msg_tpl="Server will shut down in {minutes} minutes. Please prepare to log off.",
+        countdown_msg_tpl="Server will shut down in {delay}. Please prepare to log off.",
     )
 
 
@@ -303,7 +319,7 @@ async def restart(ctx, arg1: str = None, arg2: str = None):
         now_action="restart_now",
         docker_func=docker_control.restart_container,
         immediate_msg="Server is restarting NOW. Please disconnect immediately.",
-        countdown_msg_tpl="Server will restart in {minutes} minutes. Please prepare to log off.",
+        countdown_msg_tpl="Server will restart in {delay}. Please prepare to log off.",
     )
 
 
@@ -416,8 +432,10 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
     if result is None:
         await ctx.send(f"Could not fetch logs for {target}.")
         return
-    # Truncate to fit Discord's 2000 char limit
+    # Truncate to fit Discord's 2000 char limit, then strip backticks so they
+    # can't break out of the code fence Discord renders around the output.
     output = result[-1900:] if len(result) > 1900 else result
+    output = output.replace("`", "'")
     if not output.strip():
         await ctx.send(f"No recent logs for {target}.")
         return

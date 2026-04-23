@@ -5,7 +5,7 @@ import json
 import sys
 import unittest
 from io import StringIO
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
 from src.state import state
 
@@ -444,7 +444,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
             with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                 await bot_module.send_announcement(ctx, "Hello!")
-        ctx.channel.send.assert_called_once_with("Hello!")
+        ctx.channel.send.assert_called_once_with("Hello!", allowed_mentions=ANY)
 
     async def test_send_announcement_with_role_mention(self):
         from src import bot as bot_module
@@ -747,7 +747,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
                 with patch.object(bot_module.bot, "get_channel", return_value=target_channel):
                     await bot_module.send_announcement(ctx, "Hello!")
 
-        target_channel.send.assert_called_once_with("Hello!")
+        target_channel.send.assert_called_once_with("Hello!", allowed_mentions=ANY)
         # Should also confirm to the command channel
         ctx.send.assert_called_once()
         self.assertIn(target_channel.mention, ctx.send.call_args[0][0])
@@ -765,7 +765,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
                     with self.assertLogs(level="WARNING"):
                         await bot_module.send_announcement(ctx, "Hello!")
 
-        ctx.channel.send.assert_called_once_with("Hello!")
+        ctx.channel.send.assert_called_once_with("Hello!", allowed_mentions=ANY)
 
     # --- on_command_error: MissingRequiredArgument ---
 

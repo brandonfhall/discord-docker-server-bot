@@ -2,6 +2,7 @@
 
 import logging
 import os
+import secrets
 from collections import deque
 
 import uvicorn
@@ -25,8 +26,13 @@ async def verify_token(
         return
 
     token = x_auth_token or query_token
-    if not token or token != STATUS_TOKEN:
+    if not token or not secrets.compare_digest(token, STATUS_TOKEN):
         raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+@app.get("/healthz")
+def healthz():
+    return {"ok": True}
 
 
 @app.get("/")

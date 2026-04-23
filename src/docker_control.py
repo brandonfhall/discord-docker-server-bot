@@ -161,11 +161,12 @@ def container_stats(name: str) -> Optional[dict]:
 def _sanitize(msg: str) -> str:
     if not msg:
         return ""
-    # Strict security hardening:
     # 1. Truncate to 100 chars to prevent buffer issues
     s = msg[:100]
-    # 2. Whitelist only safe characters. Removes all shell metacharacters/quotes.
+    # 2. Whitelist only safe characters — removes all shell metacharacters/quotes
     s = _VALID_MSG_CHARS.sub('', s)
+    # 3. Strip leading hyphens to prevent argument injection (e.g. --help, -n)
+    s = s.lstrip('-')
     return s.strip()
 
 
@@ -179,25 +180,18 @@ def announce_in_game(name: str, message: str) -> Result:
 
     safe_msg = _sanitize(message)
     if "{message}" in CONTAINER_MESSAGE_CMD:
-        cmd = CONTAINER_MESSAGE_CMD.format(message=safe_msg)
-        try:
-            res = c.exec_run(["/bin/sh", "-c", cmd])
-            out = res.output.decode('utf-8').strip()
-            if res.exit_code != 0:
-                return Result(False, f"error ({res.exit_code}): {out}")
-            return Result(True, f"ok: {out}" if out else "ok")
-        except Exception as e:
-            return Result(False, f"error: {e}")
+        cmd = ["/bin/sh", "-c", CONTAINER_MESSAGE_CMD.format(message=safe_msg)]
     else:
-        try:
-            argv = CONTAINER_MESSAGE_CMD.split() + [safe_msg]
-            res = c.exec_run(argv)
-            out = res.output.decode('utf-8').strip()
-            if res.exit_code != 0:
-                return Result(False, f"error ({res.exit_code}): {out}")
-            return Result(True, f"ok: {out}" if out else "ok")
-        except Exception as e:
-            return Result(False, f"error: {e}")
+        cmd = CONTAINER_MESSAGE_CMD.split() + [safe_msg]
+
+    try:
+        res = c.exec_run(cmd)
+        out = res.output.decode('utf-8').strip()
+        if res.exit_code != 0:
+            return Result(False, f"error ({res.exit_code}): {out}")
+        return Result(True, f"ok: {out}" if out else "ok")
+    except Exception as e:
+        return Result(False, f"error: {e}")
 
 
 async def run_blocking(func, *args, **kwargs):

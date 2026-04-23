@@ -122,6 +122,8 @@ Discord Administrators bypass all permission checks.
 
 ## HTTP Status API
 
+**`GET /healthz`** — Unauthenticated liveness check. Returns `{"ok": true}` whenever the process is running. Used by the Docker healthcheck; also safe to use for external uptime monitoring.
+
 **`GET /status`** — Returns container status, permissions, and recent logs as JSON.
 
 Authentication (when `STATUS_TOKEN` is set):
