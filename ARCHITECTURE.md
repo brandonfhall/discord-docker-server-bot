@@ -31,7 +31,7 @@ src/
   permissions.py     — JSON-backed role permission store with mtime cache
   history.py         — Thread-safe append-only command history/audit log
   logging_config.py  — Root logger setup + RedactingFilter
-  state.py           — BotState singleton (pending_ops, maintenance flags, last_known_status)
+  state.py           — BotState singleton (pending_ops, pending_op_info, maintenance flags, last_known_status)
 
 tests/
   conftest.py           — Sets BOT_TOKEN + ALLOWED_CONTAINERS, resets state/permissions cache per test
@@ -81,8 +81,9 @@ A single lazily-constructed `_docker_client` is reused for the lifetime of the p
 ### Pending op deduplication
 
 - `state.pending_ops: dict[str, Future | Task]` in [src/state.py](src/state.py) tracks in-flight `stop`/`restart` countdowns per container.
+- `state.pending_op_info: dict[str, dict]` mirrors `pending_ops`, storing `{"action": str, "scheduled_at": datetime}` so `!status` can compute time remaining and display the pending operation type.
 - A `Future` placeholder is inserted **before** any `await` in `_delayed_container_op` so two rapid `!stop` commands can't both pass the `has_pending_op` check.
-- `!stop now` / `!restart now` call `state.cancel_pending()` to abort a scheduled delay before executing immediately.
+- `!stop now` / `!restart now` call `state.cancel_pending()` to abort a scheduled delay before executing immediately. `cancel_pending` clears both `pending_ops` and `pending_op_info`.
 
 ### Permissions
 
