@@ -264,7 +264,33 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
             with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="running")):
                 await bot_module.status_cmd.callback(ctx, container_name=None)
         ctx.send.assert_called_once()
-        self.assertIn("running", ctx.send.call_args[0][0])
+        msg = ctx.send.call_args[0][0]
+        self.assertIn("running", msg)
+        self.assertNotIn("Pending", msg)
+
+    async def test_status_command_shows_pending_op(self):
+        from datetime import datetime, timezone
+
+        from src import bot as bot_module
+        from src.state import state
+
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        state.pending_ops["server1"] = mock_task
+        state.pending_op_info["server1"] = {"action": "stop", "scheduled_at": datetime.now(timezone.utc)}
+        try:
+            ctx = MagicMock()
+            ctx.send = AsyncMock()
+            with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+                with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="running")):
+                    await bot_module.status_cmd.callback(ctx, container_name=None)
+            msg = ctx.send.call_args[0][0]
+            self.assertIn("running", msg)
+            self.assertIn("stop", msg)
+            self.assertIn("Pending", msg)
+        finally:
+            state.pending_ops.clear()
+            state.pending_op_info.clear()
 
     # --- announce command ---
 

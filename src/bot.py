@@ -282,6 +282,7 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
     async def do_operation():
         await asyncio.sleep(SHUTDOWN_DELAY)
         state.pending_ops.pop(target, None)
+        state.pending_op_info.pop(target, None)
         try:
             result = await docker_control.run_blocking(docker_func, target)
             logging.info(f"{action.upper()} execution result for {target}: {result.message}")
@@ -293,6 +294,7 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
             except Exception:
                 pass
 
+    state.pending_op_info[target] = {"action": action, "scheduled_at": datetime.now(timezone.utc)}
     state.pending_ops[target] = bot.loop.create_task(do_operation())
 
 
@@ -331,13 +333,24 @@ async def restart(ctx, *args):
 @bot.command(name="status")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def status_cmd(ctx, container_name: str = None):
-    """Checks the container status."""
+    """Checks the container status and any pending operations."""
     target = await resolve_container(ctx, container_name)
     if not target:
         return
     logging.info(f"User {ctx.author} requested STATUS for container '{target}'")
     res = await docker_control.run_blocking(docker_control.container_status, target)
-    await ctx.send(f"Status for {target}: {res}")
+    lines = [f"Status for `{target}`: **{res}**"]
+    if state.has_pending_op(target):
+        info = state.pending_op_info.get(target, {})
+        op_action = info.get("action", "operation")
+        scheduled_at = info.get("scheduled_at")
+        if scheduled_at:
+            elapsed = (datetime.now(timezone.utc) - scheduled_at).total_seconds()
+            remaining = max(0, SHUTDOWN_DELAY - elapsed)
+            lines.append(f"⚠️ Pending **{op_action}** — executes in ~{_format_delay(int(remaining))}.")
+        else:
+            lines.append(f"⚠️ Pending **{op_action}** in progress.")
+    await ctx.send("\n".join(lines))
 
 
 @bot.command()

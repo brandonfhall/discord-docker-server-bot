@@ -10,9 +10,11 @@ class TestCancelPending(unittest.TestCase):
 
     def setUp(self):
         state.pending_ops.clear()
+        state.pending_op_info.clear()
 
     def tearDown(self):
         state.pending_ops.clear()
+        state.pending_op_info.clear()
 
     def test_cancels_active_task(self):
         mock_task = MagicMock()
@@ -21,6 +23,14 @@ class TestCancelPending(unittest.TestCase):
         state.cancel_pending("srv")
         mock_task.cancel.assert_called_once()
         self.assertNotIn("srv", state.pending_ops)
+
+    def test_cancel_also_clears_op_info(self):
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        state.pending_ops["srv"] = mock_task
+        state.pending_op_info["srv"] = {"action": "stop"}
+        state.cancel_pending("srv")
+        self.assertNotIn("srv", state.pending_op_info)
 
     def test_noop_for_unknown_container(self):
         state.cancel_pending("nonexistent")  # Should not raise
