@@ -94,7 +94,7 @@ All commands use the `!` prefix. Container name is optional when only one contai
 | `!restart [container]` | `restart` | Announce restart, wait for delay, then restart |
 | `!restart [container] now` | `restart` + `restart_now` | Immediately restart (skips countdown, cancels pending) |
 | `!announce [container] <message>` | `announce` | Send a message to the server console |
-| `!status [container]` | — | Show container status |
+| `!status [container]` | — | Show container status and any pending stop/restart countdown |
 | `!guide` | — | Show a quick command reference |
 
 ### Info

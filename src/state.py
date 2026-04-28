@@ -6,6 +6,7 @@ class BotState:
 
     def __init__(self):
         self.pending_ops: dict = {}
+        self.pending_op_info: dict = {}  # {container: {"action": str, "scheduled_at": datetime}}
         self.maintenance_mode: bool = False
         self.maintenance_reason: str = ""
         self.last_known_status: dict = {}
@@ -13,6 +14,7 @@ class BotState:
     def cancel_pending(self, container: str):
         """Cancel and remove a pending stop/restart task."""
         task = self.pending_ops.pop(container, None)
+        self.pending_op_info.pop(container, None)
         if task and not task.done():
             task.cancel()
 
