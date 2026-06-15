@@ -18,7 +18,7 @@ A single-process Python service that bridges Discord commands to the Docker daem
 | Lint / format | `ruff` (see [pyproject.toml](pyproject.toml)) |
 | Static analysis | CodeQL (Python + Actions) |
 
-Pinned versions live in [requirements.txt](requirements.txt); Python is pinned to **3.11** in both the Dockerfile and CI.
+Pinned versions live in [requirements.txt](requirements.txt); Python is pinned to **3.14** in both the Dockerfile and CI.
 
 ## Directory layout
 
@@ -106,7 +106,7 @@ A single lazily-constructed `_docker_client` is reused for the lifetime of the p
 
 ## CI / CD
 
-- [tests-reusable.yml](.github/workflows/tests-reusable.yml) — the canonical test job: sets up Python 3.11, installs pinned deps, runs ruff (lint + format check) + pytest with coverage, then does a Docker build and startup smoke test. Called by both workflows below via `workflow_call` so there is a single source of truth.
+- [tests-reusable.yml](.github/workflows/tests-reusable.yml) — the canonical test job: sets up Python 3.14, installs pinned deps, runs ruff (lint + format check) + pytest with coverage, then does a Docker build and startup smoke test. Called by both workflows below via `workflow_call` so there is a single source of truth.
 - [tests.yaml](.github/workflows/tests.yaml) — triggers on every branch push and PR to main; calls `tests-reusable`. This is the pre-merge gate.
 - [docker-publish.yml](.github/workflows/docker-publish.yml) — triggers on merge to main, version tags, and monthly (to pick up base image patches). Calls `tests-reusable` first, then builds and pushes multi-arch (amd64/arm64) images to Docker Hub and prunes old tags to the last 5.
 - [codeql.yml](.github/workflows/codeql.yml) — Python + Actions static analysis on PRs and weekly.
