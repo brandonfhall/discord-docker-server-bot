@@ -1011,7 +1011,6 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
 
 class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-
         state.maintenance_mode = False
 
     async def test_logs_blocked_during_maintenance(self):
@@ -1071,7 +1070,6 @@ class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
 
 class TestStatsCommand(unittest.IsolatedAsyncioTestCase):
     def setUp(self):
-
         state.maintenance_mode = False
 
     async def test_stats_blocked_during_maintenance(self):
@@ -1336,6 +1334,65 @@ class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
     def test_check_maintenance_blocks_control_commands(self):
         state.maintenance_mode = True
         self.assertTrue(state.is_maintenance_active("start"))
+
+
+class TestCancelCommand(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        from src import bot as bot_module
+
+        self.bot_module = bot_module
+        state.pending_op_info.clear()
+
+    def tearDown(self):
+        state.pending_ops.clear()
+        state.pending_op_info.clear()
+
+    async def test_cancel_no_pending_ops(self):
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+
+        await bot_module.cancel.callback(ctx)
+
+        self.assertIn("No pending", ctx.send.call_args[0][0])
+
+    async def test_cancel_cancels_all_pending_ops(self):
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+
+        mock_task_1 = MagicMock()
+        mock_task_1.done.return_value = False
+        mock_task_2 = MagicMock()
+        mock_task_2.done.return_value = False
+        state.pending_ops["server1"] = mock_task_1
+        state.pending_ops["server2"] = mock_task_2
+
+        with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+            with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                await bot_module.cancel.callback(ctx)
+
+        mock_task_1.cancel.assert_called_once()
+        mock_task_2.cancel.assert_called_once()
+        self.assertEqual(state.pending_ops, {})
+        self.assertEqual(state.pending_op_info, {})
+        calls = " ".join(c[0][0] for c in ctx.send.call_args_list)
+        self.assertIn("server1", calls)
+        self.assertIn("server2", calls)
+        ctx.channel.send.assert_awaited_once()
+
+    async def test_cancel_records_history(self):
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+
+        with patch("src.bot.history.record") as mock_record:
+            await bot_module.cancel.callback(ctx)
+
+        mock_record.assert_called_once_with(bot_module.HISTORY_FILE, ctx.author, "cancel", "")
 
 
 class TestHistoryCommand(unittest.IsolatedAsyncioTestCase):

@@ -93,6 +93,7 @@ All commands use the `!` prefix. Container name is optional when only one contai
 | `!stop [container] now` | `stop` + `stop_now` | Immediately stop (skips countdown, cancels pending) |
 | `!restart [container]` | `restart` | Announce restart, wait for delay, then restart |
 | `!restart [container] now` | `restart` + `restart_now` | Immediately restart (skips countdown, cancels pending) |
+| `!cancel` | `cancel` | Cancel all pending stop/restart countdowns across every container |
 | `!announce [container] <message>` | `announce` | Send a message to the server console |
 | `!status [container]` | — | Show container status and any pending stop/restart countdown |
 | `!guide` | — | Show a quick command reference |
@@ -116,7 +117,7 @@ All commands use the `!` prefix. Container name is optional when only one contai
 | `!perm add <action> <role>` | Admin | Grant a role permission for an action |
 | `!perm remove <action> <role>` | Admin | Revoke a role's permission |
 
-Valid actions: `start`, `stop`, `stop_now`, `restart`, `restart_now`, `announce`, `logs`, `stats`, `maintenance`, `history`.
+Valid actions: `start`, `stop`, `stop_now`, `restart`, `restart_now`, `cancel`, `announce`, `logs`, `stats`, `maintenance`, `history`.
 
 Discord Administrators bypass all permission checks.
 

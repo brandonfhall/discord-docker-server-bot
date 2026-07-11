@@ -330,6 +330,22 @@ async def restart(ctx, *args):
     )
 
 
+@bot.command()
+@has_permission("cancel")
+@commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
+async def cancel(ctx):
+    """Cancels all pending stop/restart countdowns across every container."""
+    cancelled = state.cancel_all_pending()
+    logging.info(f"User {ctx.author} requested CANCEL of pending operations")
+    history.record(HISTORY_FILE, ctx.author, "cancel", "")
+    if not cancelled:
+        await ctx.send("No pending stop/restart operations to cancel.")
+        return
+    logging.info(f"Cancelled pending operations for: {', '.join(cancelled)}")
+    await ctx.send(f"Cancelled pending countdowns for: {', '.join(f'`{c}`' for c in cancelled)}.")
+    await send_announcement(ctx, "**Scheduled shutdown/restart has been cancelled.**")
+
+
 @bot.command(name="status")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def status_cmd(ctx, container_name: str = None):
@@ -406,6 +422,7 @@ async def guide(ctx):
         "`!stop now`    : Stop the server immediately",
         "`!restart`     : Restart the server (with delay)",
         "`!restart now` : Restart the server immediately",
+        "`!cancel`      : Cancel a pending stop/restart countdown",
         "`!status`      : Show server status",
         "",
         "**Info**",

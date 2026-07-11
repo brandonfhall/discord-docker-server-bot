@@ -84,6 +84,7 @@ A single lazily-constructed `_docker_client` is reused for the lifetime of the p
 - `state.pending_op_info: dict[str, dict]` mirrors `pending_ops`, storing `{"action": str, "scheduled_at": datetime}` so `!status` can compute time remaining and display the pending operation type.
 - A `Future` placeholder is inserted **before** any `await` in `_delayed_container_op` so two rapid `!stop` commands can't both pass the `has_pending_op` check.
 - `!stop now` / `!restart now` call `state.cancel_pending()` to abort a scheduled delay before executing immediately. `cancel_pending` clears both `pending_ops` and `pending_op_info`.
+- `!cancel` calls `state.cancel_all_pending()` directly (the same helper maintenance mode uses) to abort every pending countdown without stopping/restarting anything or entering maintenance mode.
 
 ### Permissions
 

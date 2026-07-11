@@ -61,6 +61,7 @@ See the [full variable list](https://github.com/brandonfhall/discord-docker-serv
 | `!stop [container] now` | Immediately stop (requires `stop_now` permission) |
 | `!restart [container]` | Announce restart, wait for delay, then restart |
 | `!restart [container] now` | Immediately restart (requires `restart_now` permission) |
+| `!cancel` | Cancel all pending stop/restart countdowns across every container |
 | `!announce [container] <message>` | Send a message to the server console |
 | `!status [container]` | Show container status and any pending stop/restart countdown |
 | `!logs [container] [lines]` | View recent container logs |
