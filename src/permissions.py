@@ -15,6 +15,7 @@ ALL_ACTIONS = frozenset(
         "stop_now",
         "restart",
         "restart_now",
+        "cancel",
         "announce",
         "logs",
         "stats",

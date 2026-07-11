@@ -70,7 +70,7 @@ Tests live in [tests/](tests/) split by concern:
 | `test_config.py` | `TestConfig`, `TestNewConfig` |
 | `test_docker_control.py` | `TestDockerControl`, `TestDockerControlLogs`, `TestDockerControlStats` |
 | `test_permissions.py` | `TestPermissions` |
-| `test_bot_commands.py` | `TestBotLogic`, `TestPendingOps`, `TestStopNow`, `TestRestartNow`, `TestLogsCommand`, `TestStatsCommand`, `TestMaintenanceMode`, `TestHistoryCommand`, `TestCooldownError`, `TestGuideUpdated` |
+| `test_bot_commands.py` | `TestBotLogic`, `TestPendingOps`, `TestStopNow`, `TestRestartNow`, `TestLogsCommand`, `TestStatsCommand`, `TestMaintenanceMode`, `TestCancelCommand`, `TestHistoryCommand`, `TestCooldownError`, `TestGuideUpdated` |
 | `test_api.py` | `TestStatusEndpoint` |
 | `test_logging.py` | `TestRedactingFilter` |
 | `test_crash_alerting.py` | `TestCrashAlerting` |
