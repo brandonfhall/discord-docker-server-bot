@@ -35,7 +35,7 @@ docker compose up -d --build
 1. Go to the [Discord Developer Portal](https://discord.com/developers/applications).
 2. Click **New Application** and name it.
 3. Go to **Bot** tab, click **Add Bot**, then **Reset Token** — copy it as your `BOT_TOKEN`.
-4. Enable **Message Content Intent** (required for `!` prefix commands).
+4. Under **Privileged Gateway Intents**, enable **Message Content Intent** (required for `!` prefix commands) and **Server Members Intent** (required for role-based permission checks). The bot will fail to start with `discord.errors.PrivilegedIntentsRequired` if either is left disabled.
 
 ### 2. Invite the Bot
 
