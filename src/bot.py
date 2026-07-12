@@ -239,6 +239,10 @@ async def start(ctx, container_name: str = None):
     await ctx.send(f"Starting {target}...")
     res = await docker_control.run_blocking(docker_control.start_container, target)
     logging.info(f"START result for {ctx.author}: {res.message}")
+    if res.success:
+        # Re-seed the crash-alerting baseline so the next poll doesn't see a
+        # stale "not running" status and fire a false crash alert.
+        state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
     await ctx.send(res.message)
 
 
@@ -276,6 +280,10 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
         await docker_control.run_blocking(docker_control.announce_in_game, target, immediate_msg)
         res = await docker_control.run_blocking(docker_func, target)
         logging.info(f"Immediate {action.upper()} result for {ctx.author}: {res.message}")
+        if res.success:
+            # Re-seed the crash-alerting baseline -- otherwise the next poll sees
+            # this bot-initiated stop/restart as an unexpected crash.
+            state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
         await ctx.send(f"{action.capitalize()} result: {res.message}")
         return
 
@@ -317,6 +325,10 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
         try:
             result = await docker_control.run_blocking(docker_func, target)
             logging.info(f"{action.upper()} execution result for {target}: {result.message}")
+            if result.success:
+                # Re-seed the crash-alerting baseline -- otherwise the next poll sees
+                # this bot-initiated stop/restart as an unexpected crash.
+                state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
             await ctx.send(f"{action.capitalize()} result: {result.message}")
         except Exception as e:
             logging.error(f"Error during scheduled {action} of {target}: {e}", exc_info=True)

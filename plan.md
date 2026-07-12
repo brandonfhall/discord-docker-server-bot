@@ -183,7 +183,7 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
   happy path. Also added `state.pending_op_info.clear()` to `TestPendingOps`'s `setUp`/`tearDown` (the
   class's own hygiene; the global conftest gap is still L9). 170 tests pass, ruff clean.
 
-### M2 — Bot-initiated `!stop`/`!restart` triggers a false "Crash Alert"
+### M2 — Bot-initiated `!stop`/`!restart` triggers a false "Crash Alert" ✅ FIXED
 
 - **Category:** correctness / false alerting
 - **Location:** [src/bot.py:176-198](src/bot.py) (`crash_check_loop`), stop paths at
@@ -214,6 +214,16 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
   `state.last_known_status` is updated after a successful `!stop now`.
 - **Acceptance:** New tests pass; the four existing crash-alerting tests still pass unmodified (genuine
   crashes still alert).
+- **Resolution:** Added a `state.last_known_status[target] = await docker_control.run_blocking(docker_
+  control.container_status, target)` re-seed after every successful bot-initiated operation in
+  [src/bot.py](src/bot.py): the `start` handler, the immediate (`now`) path in `_delayed_container_op`,
+  and inside `do_operation` for the countdown path -- each gated on `res.success`/`result.success` so a
+  failed operation doesn't paper over a real problem. Added `test_no_alert_after_bot_initiated_stop` to
+  `tests/test_crash_alerting.py` and `test_stop_now_reseeds_crash_alerting_baseline` to
+  `tests/test_bot_commands.py`. Updated `test_stop_now_sends_announcements`, which asserted an exact
+  `run_blocking` call sequence (`["announce_in_game", "stop_container"]`) that the new `container_status`
+  call extends to three. 172 tests pass, ruff clean. The residual race noted in the finding (a poll firing
+  mid-restart) was left as documented, not implemented -- accepted per the finding's own guidance.
 
 ### M3 — Commands in DMs: permission-checked commands crash; `!status`/`!guide` answer anyone who shares a guild ✅ FIXED
 

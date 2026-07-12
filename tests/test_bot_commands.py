@@ -929,6 +929,8 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
             run_blocking_calls.append((func.__name__, args))
             if func.__name__ == "stop_container":
                 return docker_control.Result(True, "stopped")
+            if func.__name__ == "container_status":
+                return "exited"
             return docker_control.Result(True, "ok")
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
@@ -942,9 +944,41 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         announcement = ctx.channel.send.call_args[0][0]
         self.assertIn("NOW", announcement)
 
-        # In-game announcement was called before stop
+        # In-game announcement was called before stop, and the crash-alerting
+        # baseline (container_status) is re-seeded after a successful stop (M2).
         func_names = [c[0] for c in run_blocking_calls]
-        self.assertEqual(func_names, ["announce_in_game", "stop_container"])
+        self.assertEqual(func_names, ["announce_in_game", "stop_container", "container_status"])
+
+    async def test_stop_now_reseeds_crash_alerting_baseline(self):
+        """M2: a successful !stop now must update state.last_known_status so the
+        crash-check loop doesn't mistake this bot-initiated stop for a crash."""
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+        ctx.author.guild_permissions.administrator = True
+
+        state.last_known_status["server1"] = "running"
+
+        async def mock_run_blocking(func, *args, **kwargs):
+            if func.__name__ == "stop_container":
+                return docker_control.Result(True, "stopped")
+            if func.__name__ == "container_status":
+                return "exited"
+            return docker_control.Result(True, "ok")
+
+        try:
+            with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+                with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                    with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                        with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
+                            await bot_module.stop.callback(ctx, "now")
+
+            self.assertEqual(state.last_known_status["server1"], "exited")
+        finally:
+            state.last_known_status.clear()
 
     async def test_stop_now_with_container_name(self):
         """!stop server1 now should parse both args correctly."""
