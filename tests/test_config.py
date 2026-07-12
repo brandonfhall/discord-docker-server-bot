@@ -44,6 +44,27 @@ class TestConfig(unittest.TestCase):
         with patch.dict(os.environ, {"_BOT_TEST_INT": " 123 "}):
             self.assertEqual(self.config._int_env("_BOT_TEST_INT", 0), 123)
 
+    def test_int_env_below_minimum_falls_back_to_default(self):
+        """L3: a value below `minimum` is rejected the same way an invalid value is."""
+        with patch.dict(os.environ, {"_BOT_TEST_INT": "0"}):
+            result = self.config._int_env("_BOT_TEST_INT", 5, minimum=1)
+        self.assertEqual(result, 5)
+
+    def test_int_env_below_minimum_prints_warning(self):
+        captured = StringIO()
+        with patch.dict(os.environ, {"_BOT_TEST_INT": "-10"}):
+            with patch("sys.stderr", captured):
+                self.config._int_env("_BOT_TEST_INT", 30, minimum=5)
+        self.assertIn("WARNING", captured.getvalue())
+
+    def test_int_env_at_minimum_is_accepted(self):
+        with patch.dict(os.environ, {"_BOT_TEST_INT": "5"}):
+            self.assertEqual(self.config._int_env("_BOT_TEST_INT", 30, minimum=5), 5)
+
+    def test_int_env_no_minimum_accepts_any_value(self):
+        with patch.dict(os.environ, {"_BOT_TEST_INT": "0"}):
+            self.assertEqual(self.config._int_env("_BOT_TEST_INT", 5), 0)
+
     # --- _parse_channel_ids ---
 
     def test_parse_channel_ids_valid(self):

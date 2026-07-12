@@ -398,9 +398,12 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         ctx.send = AsyncMock()
         ctx.author = MagicMock()
         with patch("src.bot.permissions.add_role") as mock_add:
-            await bot_module.perm_add.callback(ctx, "start", role_name="Moderator")
+            with patch("src.bot.history.record") as mock_record:
+                await bot_module.perm_add.callback(ctx, "start", role_name="Moderator")
         mock_add.assert_called_once_with("start", "Moderator")
         self.assertIn("Added", ctx.send.call_args[0][0])
+        # L4: permission changes are audit-worthy and must be recorded.
+        mock_record.assert_called_once_with(bot_module.HISTORY_FILE, ctx.author, "perm add start Moderator", "")
 
     async def test_perm_remove_valid_action(self):
         from src import bot as bot_module
@@ -409,9 +412,12 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         ctx.send = AsyncMock()
         ctx.author = MagicMock()
         with patch("src.bot.permissions.remove_role") as mock_remove:
-            await bot_module.perm_remove.callback(ctx, "stop", role_name="Moderator")
+            with patch("src.bot.history.record") as mock_record:
+                await bot_module.perm_remove.callback(ctx, "stop", role_name="Moderator")
         mock_remove.assert_called_once_with("stop", "Moderator")
         self.assertIn("Removed", ctx.send.call_args[0][0])
+        # L4: permission changes are audit-worthy and must be recorded.
+        mock_record.assert_called_once_with(bot_module.HISTORY_FILE, ctx.author, "perm remove stop Moderator", "")
 
     async def test_perm_list(self):
         from src import bot as bot_module
@@ -469,6 +475,28 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         predicate = bot_module.has_permission("start")
         with patch("src.bot.permissions.is_member_allowed", return_value=False):
             self.assertFalse(await predicate.predicate(ctx))
+
+    # --- _format_delay ---
+
+    def test_format_delay_seconds_only(self):
+        from src import bot as bot_module
+
+        self.assertEqual(bot_module._format_delay(30), "30 seconds")
+        self.assertEqual(bot_module._format_delay(1), "1 second")
+
+    def test_format_delay_whole_minutes(self):
+        from src import bot as bot_module
+
+        self.assertEqual(bot_module._format_delay(300), "5 minutes")
+        self.assertEqual(bot_module._format_delay(60), "1 minute")
+
+    def test_format_delay_minutes_with_remainder(self):
+        """L13: a delay like 90s must not silently drop the remainder seconds."""
+        from src import bot as bot_module
+
+        self.assertEqual(bot_module._format_delay(90), "1 minute 30 seconds")
+        self.assertEqual(bot_module._format_delay(150), "2 minutes 30 seconds")
+        self.assertEqual(bot_module._format_delay(121), "2 minutes 1 second")
 
     # --- check_guild ---
 
@@ -651,6 +679,22 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
             with self.assertLogs(level="ERROR"):
                 await bot_module.on_command_error(ctx, error)
 
+    async def test_on_command_error_bad_argument_shows_usage(self):
+        """L6: `!history abc` raises BadArgument during int conversion; it must
+        not be silently swallowed (previously fell through to the logged-only
+        else branch, leaving the user with no response at all)."""
+        from src import bot as bot_module
+        from discord.ext import commands
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.command = MagicMock()
+        ctx.command.qualified_name = "history"
+        error = commands.BadArgument("abc is not an int")
+        await bot_module.on_command_error(ctx, error)
+        ctx.send.assert_called_once()
+        self.assertIn("!history", ctx.send.call_args[0][0])
+
     async def test_on_command_error_silent_in_disallowed_channel(self):
         """SilentCheckFailure (as raised by check_guild for a disallowed origin)
         should produce no response."""
@@ -754,12 +798,17 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         # must be a real Future rather than a bare MagicMock.
         mock_loop.create_future.side_effect = asyncio.get_running_loop().create_future
 
+        # L7: the pre-flight "is it running" check queries container_status
+        # before proceeding -- must report "running" for the countdown to start.
+        async def mock_run_blocking(func, *args, **kwargs):
+            if func.__name__ == "container_status":
+                return "running"
+            return docker_control.Result(True, "ok")
+
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch(
-                        "src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))
-                    ):
+                    with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
                         with patch.object(bot_module.bot, "loop", mock_loop):
                             await bot_module.stop.callback(ctx, "test_container")
 
@@ -769,6 +818,31 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         # Task registered
         self.assertIn("test_container", state.pending_ops)
         self.assertIs(state.pending_ops["test_container"], mock_task)
+
+    async def test_stop_on_already_stopped_container_skips_countdown(self):
+        """L7: !stop on a container that isn't running must not announce a
+        countdown (Discord + in-game) for an operation that's already a no-op --
+        it should reply immediately instead."""
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+
+        async def mock_run_blocking(func, *args, **kwargs):
+            if func.__name__ == "container_status":
+                return "exited"
+            return docker_control.Result(True, "ok")
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
+            with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
+                await bot_module.stop.callback(ctx, "test_container")
+
+        ctx.send.assert_called_once()
+        self.assertIn("not running", ctx.send.call_args[0][0].lower())
+        ctx.channel.send.assert_not_called()
+        self.assertNotIn("test_container", state.pending_ops)
 
     async def test_second_stop_rejected_after_first_registers_task(self):
         """After the first !stop schedules a task, a second !stop is rejected."""
@@ -795,12 +869,18 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         # must be a real Future rather than a bare MagicMock.
         mock_loop.create_future.side_effect = asyncio.get_running_loop().create_future
 
+        # L7: the pre-flight "is it running" check must see "running" for ctx1's
+        # call to proceed; ctx2 is rejected by the dedup check before ever
+        # reaching it.
+        async def mock_run_blocking(func, *args, **kwargs):
+            if func.__name__ == "container_status":
+                return "running"
+            return docker_control.Result(True, "ok")
+
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch(
-                        "src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))
-                    ):
+                    with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
                         with patch.object(bot_module.bot, "loop", mock_loop):
                             await bot_module.stop.callback(ctx1, "test_container")
                             await bot_module.stop.callback(ctx2, "test_container")
@@ -825,9 +905,12 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch.object(bot_module.bot, "loop", mock_loop):
-                        with self.assertRaises(RuntimeError):
-                            await bot_module.stop.callback(ctx, "test_container")
+                    # L7: the pre-flight status check must pass ("running") for
+                    # execution to reach the countdown announcement at all.
+                    with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="running")):
+                        with patch.object(bot_module.bot, "loop", mock_loop):
+                            with self.assertRaises(RuntimeError):
+                                await bot_module.stop.callback(ctx, "test_container")
 
         self.assertNotIn("test_container", state.pending_ops)
         self.assertNotIn("test_container", state.pending_op_info)
@@ -852,12 +935,17 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         mock_loop = MagicMock()
         mock_loop.create_future.side_effect = asyncio.get_running_loop().create_future
 
+        # L7: the pre-flight status check must pass ("running") for execution to
+        # reach the countdown announcement (where the cancel-during-flight happens).
+        async def mock_run_blocking(func, *args, **kwargs):
+            if func.__name__ == "container_status":
+                return "running"
+            return docker_control.Result(True, "ok")
+
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch(
-                        "src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))
-                    ):
+                    with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
                         with patch.object(bot_module.bot, "loop", mock_loop):
                             await bot_module.stop.callback(ctx, "test_container")
 
@@ -893,12 +981,17 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         mock_loop.create_task.side_effect = _create_task
         mock_loop.create_future.side_effect = asyncio.get_running_loop().create_future
 
+        # L7: the pre-flight status check must pass ("running") for execution to
+        # reach the countdown announcement at all.
+        async def mock_run_blocking(func, *args, **kwargs):
+            if func.__name__ == "container_status":
+                return "running"
+            return docker_control.Result(True, "ok")
+
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch(
-                        "src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))
-                    ):
+                    with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
                         with patch.object(bot_module.bot, "loop", mock_loop):
                             await bot_module.stop.callback(ctx, "test_container")
 
@@ -932,18 +1025,54 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         ctx.channel.send = AsyncMock()
         ctx.author.guild_permissions.administrator = True
 
+        # L7: the pre-flight status check must see "running" to proceed.
+        async def mock_run_blocking(func, *args, **kwargs):
+            if func.__name__ == "container_status":
+                return "running"
+            return docker_control.Result(True, "stopped")
+
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch(
-                        "src.bot.docker_control.run_blocking",
-                        new=AsyncMock(return_value=docker_control.Result(True, "stopped")),
-                    ):
+                    with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
                         await bot_module.stop.callback(ctx, "now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("immediately" in c for c in calls))
         self.assertTrue(any("stopped" in c for c in calls))
+
+    async def test_stop_now_on_already_stopped_container_skips_announcements(self):
+        """L7: !stop now on a container that isn't running must not send the
+        "shutting down NOW" announcements for an operation that's already a
+        no-op -- it should reply immediately instead. A pending countdown is
+        still cancelled, since that's a useful side effect regardless of the
+        container's current state."""
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+        ctx.author.guild_permissions.administrator = True
+
+        pending_task = MagicMock()
+        pending_task.done.return_value = False
+        state.pending_ops["server1"] = pending_task
+
+        async def mock_run_blocking(func, *args, **kwargs):
+            if func.__name__ == "container_status":
+                return "exited"
+            return docker_control.Result(True, "ok")
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
+                await bot_module.stop.callback(ctx, "now")
+
+        self.assertIn("not running", ctx.send.call_args[0][0].lower())
+        ctx.channel.send.assert_not_called()
+        # The pre-existing pending countdown was still cancelled.
+        pending_task.cancel.assert_called_once()
+        self.assertNotIn("server1", state.pending_ops)
 
     async def test_stop_now_sends_announcements(self):
         """!stop now should send Discord and in-game announcements before stopping."""
@@ -962,7 +1091,10 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
             if func.__name__ == "stop_container":
                 return docker_control.Result(True, "stopped")
             if func.__name__ == "container_status":
-                return "exited"
+                # First call is L7's pre-flight check (must be "running" to
+                # proceed); second call is M2's post-stop crash-alerting re-seed.
+                status_calls = sum(1 for name, _ in run_blocking_calls if name == "container_status")
+                return "running" if status_calls <= 1 else "exited"
             return docker_control.Result(True, "ok")
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
@@ -976,10 +1108,11 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         announcement = ctx.channel.send.call_args[0][0]
         self.assertIn("NOW", announcement)
 
-        # In-game announcement was called before stop, and the crash-alerting
-        # baseline (container_status) is re-seeded after a successful stop (M2).
+        # L7's pre-flight check runs first; in-game announcement was called
+        # before stop; the crash-alerting baseline (container_status) is
+        # re-seeded after a successful stop (M2).
         func_names = [c[0] for c in run_blocking_calls]
-        self.assertEqual(func_names, ["announce_in_game", "stop_container", "container_status"])
+        self.assertEqual(func_names, ["container_status", "announce_in_game", "stop_container", "container_status"])
 
     async def test_stop_now_reseeds_crash_alerting_baseline(self):
         """M2: a successful !stop now must update state.last_known_status so the
@@ -994,11 +1127,16 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
 
         state.last_known_status["server1"] = "running"
 
+        status_calls = []
+
         async def mock_run_blocking(func, *args, **kwargs):
             if func.__name__ == "stop_container":
                 return docker_control.Result(True, "stopped")
             if func.__name__ == "container_status":
-                return "exited"
+                # First call is L7's pre-flight check (must be "running" to
+                # proceed); second call is M2's post-stop crash-alerting re-seed.
+                status_calls.append(1)
+                return "running" if len(status_calls) <= 1 else "exited"
             return docker_control.Result(True, "ok")
 
         try:
@@ -1022,13 +1160,16 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         ctx.channel.send = AsyncMock()
         ctx.author.guild_permissions.administrator = True
 
+        # L7: the pre-flight status check must see "running" to proceed.
+        async def mock_run_blocking(func, *args, **kwargs):
+            if func.__name__ == "container_status":
+                return "running"
+            return docker_control.Result(True, "stopped")
+
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch(
-                        "src.bot.docker_control.run_blocking",
-                        new=AsyncMock(return_value=docker_control.Result(True, "stopped")),
-                    ):
+                    with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
                         await bot_module.stop.callback(ctx, "server1", "now")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -1044,13 +1185,16 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         ctx.channel.send = AsyncMock()
         ctx.author.guild_permissions.administrator = True
 
+        # L7: the pre-flight status check must see "running" to proceed.
+        async def mock_run_blocking(func, *args, **kwargs):
+            if func.__name__ == "container_status":
+                return "running"
+            return docker_control.Result(True, "stopped")
+
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1", "server2"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch(
-                        "src.bot.docker_control.run_blocking",
-                        new=AsyncMock(return_value=docker_control.Result(True, "stopped")),
-                    ):
+                    with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
                         await bot_module.stop.callback(ctx, "now", "server1")
 
         calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -1080,14 +1224,17 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         ctx.channel.send = AsyncMock()
         ctx.author.guild_permissions.administrator = False
 
+        # L7: the pre-flight status check must see "running" to proceed.
+        async def mock_run_blocking(func, *args, **kwargs):
+            if func.__name__ == "container_status":
+                return "running"
+            return docker_control.Result(True, "stopped")
+
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
                     with patch("src.bot.permissions.is_member_allowed", return_value=True) as mock_perm:
-                        with patch(
-                            "src.bot.docker_control.run_blocking",
-                            new=AsyncMock(return_value=docker_control.Result(True, "stopped")),
-                        ):
+                        with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
                             await bot_module.stop.callback(ctx, "now")
 
         mock_perm.assert_called_once_with("stop_now", ctx.author)
@@ -1132,18 +1279,27 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         mock_task = MagicMock()
         mock_loop = MagicMock()
         mock_loop.create_task.side_effect = lambda coro: (coro.close(), mock_task)[1]
+        # The fix reads .cancelled()/.done() on the placeholder Future, so it
+        # must be a real Future rather than a bare MagicMock.
+        mock_loop.create_future.side_effect = asyncio.get_running_loop().create_future
+
+        # L7: the pre-flight status check must see "running" to proceed.
+        async def mock_run_blocking(func, *args, **kwargs):
+            if func.__name__ == "container_status":
+                return "running"
+            return docker_control.Result(True, "ok")
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                 with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                    with patch(
-                        "src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))
-                    ):
+                    with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
                         with patch.object(bot_module.bot, "loop", mock_loop):
                             await bot_module.stop.callback(ctx)
 
         first_msg = ctx.send.call_args_list[0][0][0]
         self.assertIn("will stop", first_msg)
+        # Task registered (not treated as cancelled-during-announcement).
+        self.assertIs(state.pending_ops.get("server1"), mock_task)
 
     async def test_stop_now_case_insensitive(self):
         """'NOW', 'Now', etc. should all trigger the immediate path."""
@@ -1156,13 +1312,16 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
             ctx.channel.send = AsyncMock()
             ctx.author.guild_permissions.administrator = True
 
+            # L7: the pre-flight status check must see "running" to proceed.
+            async def mock_run_blocking(func, *args, **kwargs):
+                if func.__name__ == "container_status":
+                    return "running"
+                return docker_control.Result(True, "stopped")
+
             with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
                 with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
                     with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
-                        with patch(
-                            "src.bot.docker_control.run_blocking",
-                            new=AsyncMock(return_value=docker_control.Result(True, "stopped")),
-                        ):
+                        with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
                             await bot_module.stop.callback(ctx, variant)
 
             calls = [c[0][0] for c in ctx.send.call_args_list]
@@ -1252,6 +1411,19 @@ class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
             with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="   ")):
                 await bot_module.logs_cmd.callback(ctx, arg1=None, arg2=None)
         self.assertIn("No recent logs", ctx.send.call_args[0][0])
+
+    async def test_logs_command_unrecognized_arg_shows_usage(self):
+        """L6: a typo'd container name (e.g. `!logs tyop_container`) must not
+        silently fall back to the default container -- it should show usage."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            await bot_module.logs_cmd.callback(ctx, arg1="tyop_container", arg2=None)
+        ctx.send.assert_called_once()
+        self.assertIn("Unrecognized argument", ctx.send.call_args[0][0])
+        self.assertIn("tyop_container", ctx.send.call_args[0][0])
 
 
 class TestStatsCommand(unittest.IsolatedAsyncioTestCase):
@@ -1357,6 +1529,33 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("immediately" in c for c in calls))
         self.assertTrue(any("restarted" in c for c in calls))
+
+    async def test_restart_now_succeeds_on_stopped_container(self):
+        """L7: unlike !stop, !restart must NOT be blocked by a 'not running'
+        pre-check -- Docker's restart legitimately starts a stopped container,
+        so gating it on current status would be a real behavior regression."""
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+        ctx.author.guild_permissions.administrator = True
+
+        async def mock_run_blocking(func, *args, **kwargs):
+            if func.__name__ == "container_status":
+                return "exited"
+            return docker_control.Result(True, "restarted")
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
+                        await bot_module.restart.callback(ctx, "now")
+
+        calls = [c[0][0] for c in ctx.send.call_args_list]
+        self.assertTrue(any("restarted" in c for c in calls))
+        self.assertFalse(any("not running" in c.lower() for c in calls))
 
     async def test_restart_now_denied_without_permission(self):
         bot_module = self.bot_module
@@ -1512,10 +1711,32 @@ class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
         await bot_module.maintenance_cmd.callback(ctx, toggle="maybe", reason="")
         self.assertIn("Usage", ctx.send.call_args[0][0])
 
-    def test_check_maintenance_allows_admin_commands(self):
+    async def test_maintenance_mode_does_not_block_guide_history_or_perm(self):
+        """L5: guide/history/perm* never call is_maintenance_active at all, so
+        they must keep working during maintenance mode -- verified via the real
+        handlers rather than by probing hardcoded command-name strings against
+        the state method in isolation."""
+        bot_module = self.bot_module
         state.maintenance_mode = True
-        for cmd_name in ("maintenance", "perm", "guide", "history"):
-            self.assertFalse(state.is_maintenance_active(cmd_name))
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.author = MagicMock()
+
+        block_message = "bot is in maintenance mode."
+
+        await bot_module.guide.callback(ctx)
+        self.assertNotIn(block_message, ctx.send.call_args[0][0].lower())
+
+        ctx.send.reset_mock()
+        with patch("src.history.load", return_value=[]):
+            await bot_module.history_cmd.callback(ctx, count=10)
+        self.assertNotIn(block_message, ctx.send.call_args[0][0].lower())
+
+        ctx.send.reset_mock()
+        with patch("src.bot.permissions.list_permissions", return_value={"start": ["ServerAdmin"]}):
+            await bot_module.perm_list.callback(ctx)
+        self.assertNotIn(block_message, ctx.send.call_args[0][0].lower())
 
     def test_check_maintenance_blocks_control_commands(self):
         state.maintenance_mode = True

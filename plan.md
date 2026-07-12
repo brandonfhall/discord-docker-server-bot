@@ -410,7 +410,7 @@ auth as primary; either drop the query param (breaking — check with maintainer
 README note that the header form is preferred. If dropped, update
 `tests/test_api.py::test_status_accepts_token_via_query_param`.
 
-### L2 — `RedactingFilter` doesn't redact exception tracebacks
+### L2 — `RedactingFilter` doesn't redact exception tracebacks ✅ FIXED
 [src/logging_config.py:15-22](src/logging_config.py). Only `record.getMessage()` is redacted; a token
 inside an exception message (`exc_info`) reaches handlers verbatim. Fix inside `filter()`:
 ```python
@@ -424,8 +424,10 @@ if record.exc_info and not record.exc_text:
 ```
 (Formatters prefer `exc_text` when set.) Test in `tests/test_logging.py`: log an exception whose message
 contains the token; assert the formatted handler output has `[REDACTED]`.
+- **Resolution:** Implemented exactly as prescribed in [src/logging_config.py](src/logging_config.py).
+  Added `test_redacts_token_in_exception_traceback` in `tests/test_logging.py`.
 
-### L3 — No bounds validation on integer env vars
+### L3 — No bounds validation on integer env vars ✅ FIXED
 [src/config.py:8-17](src/config.py). `CRASH_CHECK_INTERVAL=0` → `tasks.loop(seconds=0)` busy-loop
 hammering the Docker socket; `DOCKER_MAX_WORKERS=0` → `ThreadPoolExecutor` raises `ValueError` at import
 with a confusing traceback; negative `SHUTDOWN_DELAY`/`COMMAND_COOLDOWN` are nonsense. Add a
@@ -433,13 +435,21 @@ with a confusing traceback; negative `SHUTDOWN_DELAY`/`COMMAND_COOLDOWN` are non
 stderr warning) when `value < minimum`. Apply: `DOCKER_MAX_WORKERS` min 1, `CRASH_CHECK_INTERVAL` min 5,
 `SHUTDOWN_DELAY` min 0, `COMMAND_COOLDOWN` min 0, `STATUS_PORT` min 1. Tests in `tests/test_config.py`
 mirroring the existing invalid-int tests.
+- **Resolution:** Implemented as prescribed in [src/config.py](src/config.py). Added 4 tests to
+  `tests/test_config.py` covering the `minimum` parameter directly (below/at/no minimum, warning printed).
+  Did not add reload-based tests for each individual module-level constant (`DOCKER_MAX_WORKERS`, etc.) --
+  the `_int_env` helper tests cover the logic; the module-level assignments are one-line, obviously-correct
+  usages of it.
 
-### L4 — `!perm add`/`!perm remove` aren't recorded in the audit history
+### L4 — `!perm add`/`!perm remove` aren't recorded in the audit history ✅ FIXED
 [src/bot.py:582-601](src/bot.py). Permission changes are the most audit-worthy action the bot has.
 Add `history.record(HISTORY_FILE, ctx.author, f"perm add {action} {role_name}", "")` (and the remove
 equivalent) after the mutation. Test: assert `history.record` called (mock it as other handler tests do).
+- **Resolution:** Implemented exactly as prescribed in [src/bot.py](src/bot.py) `perm_add`/`perm_remove`.
+  Updated `test_perm_add_valid_action`/`test_perm_remove_valid_action` to assert `history.record` is
+  called with the expected action string.
 
-### L5 — Maintenance exempt-set is half dead code; `!maintenance` lacks a cooldown
+### L5 — Maintenance exempt-set is half dead code; `!maintenance` lacks a cooldown ✅ FIXED
 [src/state.py:33-46](src/state.py), [src/bot.py:539-541](src/bot.py). The exempt set lists `guide`,
 `history`, and `perm*`, but those handlers never call `is_maintenance_active` — only
 start/stop/restart/announce/logs/stats do, so the entries are unreachable. Either add the check to those
@@ -447,21 +457,61 @@ handlers (behavior-neutral: they're exempt) or shrink the set to what's real and
 `maintenance_cmd` is the only command without `@commands.cooldown`, contradicting CLAUDE.md's rule —
 add it or add a code comment stating why it's exempt (e.g. "must never be rate-limited during incidents"
 — that's a defensible choice; make it explicit).
+- **Resolution:** Diverged from the literal "add the check to those handlers" option after finding an
+  existing test (`test_check_maintenance_allows_admin_commands`) that encoded the exempt set as a live
+  contract on `is_maintenance_active` itself, independent of any caller. Wiring a no-op maintenance check
+  into `guide`/`history`/`perm*` would have added pointless dead-branch boilerplate to five handlers for a
+  check that can never trigger (they're exempt by definition). Instead: simplified
+  `is_maintenance_active` in [src/state.py](src/state.py) to just return `self.maintenance_mode` (the
+  exempt set matched nothing any real caller ever passed), with a docstring explaining that only the six
+  container-mutating commands call it at all. Replaced the now-invalid state-layer test with
+  `test_maintenance_mode_does_not_block_guide_history_or_perm`, which verifies the real, observable
+  contract by invoking the actual `guide`/`history_cmd`/`perm_list` handlers under `maintenance_mode=True`
+  and asserting they don't return the maintenance-block message. Added a comment above `maintenance_cmd`
+  explaining the intentional missing `@commands.cooldown` (admins must be able to toggle it again
+  immediately during an incident).
 
-### L6 — Silent arg-parsing surprises in `!logs` and `!history`
+### L6 — Silent arg-parsing surprises in `!logs` and `!history` ✅ FIXED
 [src/bot.py:446-456](src/bot.py): `!logs tyop_container` ignores the unrecognized arg and serves the
 default container's logs — surprising for a typo. Track unmatched args and reply with usage instead.
 [src/bot.py:514](src/bot.py): `!history abc` raises `BadArgument`, which `on_command_error` doesn't
 handle → user gets silence. Add a `commands.BadArgument`/`commands.UserInputError` branch to
 `on_command_error` sending the generic usage line. Tests: one per behavior in `TestLogsCommand` /
 `TestHistoryCommand`.
+- **Resolution:** Implemented both as prescribed in [src/bot.py](src/bot.py): `logs_cmd` now tracks
+  unrecognized args and replies with usage instead of silently falling back to the default container;
+  `on_command_error` gained a `commands.UserInputError` branch (placed after the more specific
+  `MissingRequiredArgument` branch, so that one still wins for its own cases) that replies with generic
+  usage instead of silently logging. Added `test_logs_command_unrecognized_arg_shows_usage` and
+  `test_on_command_error_bad_argument_shows_usage`.
 
-### L7 — Countdown/immediate ops announce before checking the container can actually stop
+### L7 — Countdown/immediate ops announce before checking the container can actually stop ✅ FIXED (stop only — see resolution)
 [src/bot.py:252-265, 276-280](src/bot.py). `!stop` on an already-stopped container announces
 "shutting down in 5 minutes" in Discord and in-game, then 5 minutes later reports "not running".
 Cheap fix: call `container_status` (via `run_blocking`) after `resolve_container`; if the op is `stop`/
 `restart` and status isn't `running`, reply `Container X is not running.` and skip announcements.
 Test in `TestPendingOps`.
+- **Resolution:** Scoped to `stop` only, deliberately excluding `restart` -- verified in
+  [src/docker_control.py](src/docker_control.py) that `restart_container` succeeds unconditionally
+  (Docker's restart legitimately starts a stopped container), and an existing test
+  (`test_docker_actions`) already asserts restart succeeds regardless of prior status. Gating `restart` on
+  "must be running" would have been a real behavior regression, not a cosmetic fix, despite the finding's
+  literal wording. Added a `_bail_if_not_running()` local helper inside `_delayed_container_op`
+  ([src/bot.py](src/bot.py)), called once in the `now` path (after the permission check and
+  `cancel_pending`, so permission denials and pending-op cancellation are unaffected) and once in the
+  countdown path (after the `has_pending_op` dedup check, so duplicate-request rejection is unaffected).
+  This ordering choice kept ~15 of the ~20 affected tests passing unchanged; the remainder had their
+  `run_blocking` mocks converted from blanket returns to `func.__name__`-aware side effects returning
+  `"running"` for the pre-check (two tests needed call-order-aware mocks, since M2's post-op re-seed also
+  calls `container_status` with a *different* expected value). Added 3 new behavior tests: `!stop` and
+  `!stop now` on an already-stopped container skip announcements and reply "not running"
+  (`test_stop_on_already_stopped_container_skips_countdown`,
+  `test_stop_now_on_already_stopped_container_skips_announcements`), and a confirming test that `!restart
+  now` still succeeds on a stopped container
+  (`test_restart_now_succeeds_on_stopped_container`). One additional latent gap fixed in passing:
+  `test_stop_without_now_still_uses_countdown` never received M1's `create_future`-must-be-a-real-Future
+  fix (it's in a different test class than the ones M1 touched) and was only passing because it didn't
+  assert past the first message; now fixed and given a real assertion. 188 tests pass, ruff clean.
 
 ### L8 — Compose healthchecks hardcode port 8000
 [docker-compose.yml:35-40](docker-compose.yml), [docker-compose.dev.yml:33-38](docker-compose.dev.yml).
@@ -499,7 +549,7 @@ spirit of the `run_blocking()` house rule. When convenient: `await docker_contro
 in handlers (the lock already makes it thread-safe). Low urgency; don't refactor permissions caching for
 this.
 
-### L13 — Cosmetic polish (fold into any nearby PR)
+### L13 — Cosmetic polish (fold into any nearby PR) ✅ FIXED
 - `_format_delay(90)` → "1 minute" (drops 30 s) — [src/bot.py:230-235](src/bot.py); include remainder
   seconds (`"1 minute 30 seconds"`) or round.
 - `!stop`'s immediate-path message renders as "Stopping" via `'ping' if action == 'stop'` string surgery —
@@ -507,6 +557,15 @@ this.
   `verb` parameter alongside `action`.
 - `!status` records no history while the other read-only commands (`logs`, `stats`) do —
   [src/bot.py:349-357](src/bot.py); pick one convention.
+- **Resolution:** All three implemented in [src/bot.py](src/bot.py). `_format_delay` now uses
+  `divmod` and appends remainder seconds when nonzero; added 3 tests
+  (`test_format_delay_seconds_only`, `test_format_delay_whole_minutes`,
+  `test_format_delay_minutes_with_remainder`). `_delayed_container_op` gained an explicit `verb`
+  parameter (`"Stopping"`/`"Restarting"`) passed from the `stop`/`restart` command definitions, replacing
+  the string-surgery trick -- identical rendered output, no test changes needed. `!status` was kept
+  unrecorded (chosen over adding recording to it) with a comment explaining why: it's expected to be
+  polled far more often than `logs`/`stats`, and recording it would flood the audit log with low-value
+  entries.
 
 ---
 

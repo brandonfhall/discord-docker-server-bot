@@ -2,6 +2,7 @@
 
 import logging
 import os
+import traceback
 from logging.handlers import RotatingFileHandler
 
 
@@ -19,6 +20,15 @@ class RedactingFilter(logging.Filter):
                 msg = msg.replace(token, "[REDACTED]")
             record.msg = msg
             record.args = ()
+
+            # exc_info is formatted separately from the message and would otherwise
+            # reach handlers un-redacted if a token appears in an exception's str().
+            if record.exc_info and not record.exc_text:
+                text = "".join(traceback.format_exception(*record.exc_info))
+                for token in self._tokens:
+                    text = text.replace(token, "[REDACTED]")
+                record.exc_text = text
+                record.exc_info = None
         return True
 
 
