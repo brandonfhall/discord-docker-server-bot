@@ -26,7 +26,7 @@ jobs:
       contents: read
       packages: write
     outputs:
-      tags: ${{ steps.meta.outputs.tags }}
+      tag_names: ${{ steps.tag_names.outputs.names }}
 
     steps:
       - name: Checkout
@@ -48,6 +48,18 @@ jobs:
             type=raw,value={{date 'YYYYMMDD'}}
             type=ref,event=tag
             type=schedule,pattern=monthly
+
+      - name: Flatten tag names for cross-job output
+        id: tag_names
+        # steps.meta.outputs.tags is newline-separated "repo:tag" entries.
+        # Job outputs (needs.<job>.outputs.<x>, consumed by prune-tags below)
+        # don't reliably survive a multi-line value across the job boundary --
+        # confirmed empirically: prune-tags received an empty NEW_TAGS and
+        # deleted a tag this run had just pushed. Collapse to a single-line,
+        # comma-separated list of bare tag names before exposing it.
+        run: |
+          NAMES=$(echo "${{ steps.meta.outputs.tags }}" | sed -E "s#^${IMAGE_NAME}:##" | paste -sd, -)
+          echo "names=$NAMES" >> "$GITHUB_OUTPUT"
 
       - name: Login to Docker Hub
         uses: docker/login-action@v4
@@ -92,7 +104,9 @@ jobs:
           # last_updated -- it can lag a freshly-pushed tag by more than the time
           # it takes this job to start, which previously caused the brand-new tag
           # to sort as "oldest" and get deleted seconds after being published.
-          NEW_TAGS: ${{ needs.build-and-push.outputs.tags }}
+          # Already a single-line, comma-separated list of bare tag names (see
+          # the "Flatten tag names" step in build-and-push).
+          NEW_TAGS: ${{ needs.build-and-push.outputs.tag_names }}
           DRY_RUN: false
         run: |
           # 1. Authenticate with Docker Hub to get JWT
@@ -115,8 +129,7 @@ jobs:
           # it takes this job to start, so relying on API-reported last_updated
           # alone can make a tag pushed seconds ago sort as the oldest and get
           # deleted -- confirmed happening in practice, not a hypothetical.
-          THIS_RUN_TAGS=$(echo "$NEW_TAGS" | sed -E "s#^${IMAGE_NAME}:##")
-          FULL_IGNORE=$(printf '%s\n%s\n' "$IGNORE_TAGS" "$THIS_RUN_TAGS" | tr ',' '\n' | grep -v '^$' | paste -sd, -)
+          FULL_IGNORE=$(printf '%s\n%s\n' "$IGNORE_TAGS" "$NEW_TAGS" | tr ',' '\n' | grep -v '^$' | paste -sd, -)
           echo "Protecting tags from pruning: $FULL_IGNORE"
           # Convert comma-separated ignore list to regex alternation (e.g., "latest|develop|20260712")
           IGNORE_REGEX="^($(echo "$FULL_IGNORE" | tr ',' '|'))$"
