@@ -333,7 +333,7 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
 - **Acceptance:** Fresh `docker compose up` on a host exposes nothing off-box by default; README/
   DOCKERHUB updated consistently.
 
-### M6 — Announcements re-enable pinging **all** roles; user-supplied maintenance reason can ping arbitrary roles
+### M6 — Announcements re-enable pinging **all** roles; user-supplied maintenance reason can ping arbitrary roles ✅ FIXED
 
 - **Category:** security / mention injection
 - **Location:** [src/bot.py:104](src/bot.py) (`send_announcement`), [src/bot.py:562](src/bot.py)
@@ -360,6 +360,10 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
   `.roles[0].id`); with it 0, assert an everything-off AllowedMentions.
 - **Acceptance:** New tests pass; a maintenance reason containing `<@&123>` renders as text, while the
   configured announce role still pings. Update the "Ping control" bullet in ARCHITECTURE.md.
+- **Resolution:** Implemented exactly as prescribed in [src/bot.py](src/bot.py) `send_announcement`.
+  Added two tests asserting the exact `allowed_mentions` object passed to `channel.send`: scoped to
+  `[Object(id=ANNOUNCE_ROLE_ID)]` when set, `AllowedMentions.none()` (roles=False) otherwise. Updated the
+  "Ping control" bullet in ARCHITECTURE.md. 174 tests pass, ruff clean.
 
 ### M7 — `CONTAINER_MESSAGE_CMD` templates with any brace besides `{message}` crash `announce_in_game`
 

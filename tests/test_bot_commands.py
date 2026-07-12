@@ -120,6 +120,38 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         self.assertIn("<@&999>", sent)
         self.assertIn("Hello!", sent)
 
+    async def test_send_announcement_scopes_mention_to_announce_role_only(self):
+        """M6: allowed_mentions must scope to exactly ANNOUNCE_ROLE_ID, not every
+        role in the server -- otherwise a user-supplied message (e.g. a maintenance
+        reason) containing another role mention would ping it too."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+        with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+            with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 999):
+                await bot_module.send_announcement(ctx, "Hello!")
+
+        mentions = ctx.channel.send.call_args.kwargs["allowed_mentions"]
+        self.assertEqual([r.id for r in mentions.roles], [999])
+
+    async def test_send_announcement_disables_all_mentions_without_announce_role(self):
+        """M6: with ANNOUNCE_ROLE_ID unset, no roles should be re-enabled at all."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+        with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+            with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                await bot_module.send_announcement(ctx, "Hello!")
+
+        mentions = ctx.channel.send.call_args.kwargs["allowed_mentions"]
+        self.assertEqual(mentions.roles, False)
+
     async def test_send_announcement_send_failure_is_logged(self):
         from src import bot as bot_module
 

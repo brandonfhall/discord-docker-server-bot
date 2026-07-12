@@ -112,10 +112,19 @@ async def send_announcement(ctx, message: str):
         else:
             logging.warning(f"Configured ANNOUNCE_CHANNEL_ID {ANNOUNCE_CHANNEL_ID} not found.")
 
+    # Re-enable pinging only the configured announce role, never every role in the
+    # server -- a maintenance/announce message can contain user-supplied text, and
+    # AllowedMentions(roles=True) would let a stray "<@&other_role_id>" ping it too.
+    allowed_mentions = (
+        discord.AllowedMentions(roles=[discord.Object(id=ANNOUNCE_ROLE_ID)])
+        if ANNOUNCE_ROLE_ID
+        else discord.AllowedMentions.none()
+    )
+
     try:
         await target_channel.send(
             content,
-            allowed_mentions=discord.AllowedMentions(roles=True),
+            allowed_mentions=allowed_mentions,
         )
     except Exception as e:
         logging.error(f"Failed to send announcement to {target_channel}: {e}", exc_info=True)
