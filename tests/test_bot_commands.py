@@ -637,10 +637,13 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.message.content = "!perm badsubcmd"
+        ctx.guild.id = 1
+        ctx.channel.id = 1
         ctx.author.guild_permissions.administrator = True
         error = commands.CommandNotFound("perm badsubcmd")
-        with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
-            await bot_module.on_command_error(ctx, error)
+        with patch.object(bot_module, "DISCORD_GUILD_ID", 0):
+            with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
+                await bot_module.on_command_error(ctx, error)
         ctx.send.assert_called_once()
         self.assertIn("!perm", ctx.send.call_args[0][0])
 
@@ -651,10 +654,13 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.message.content = "!perm badsubcmd"
+        ctx.guild.id = 1
+        ctx.channel.id = 1
         ctx.author.guild_permissions.administrator = False
         error = commands.CommandNotFound("perm badsubcmd")
-        with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
-            await bot_module.on_command_error(ctx, error)
+        with patch.object(bot_module, "DISCORD_GUILD_ID", 0):
+            with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
+                await bot_module.on_command_error(ctx, error)
         ctx.send.assert_not_called()
 
     async def test_on_command_error_command_not_found_other_silent(self):
@@ -666,6 +672,39 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         ctx.message.content = "!unknowncmd"
         error = commands.CommandNotFound("unknowncmd")
         with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
+            await bot_module.on_command_error(ctx, error)
+        ctx.send.assert_not_called()
+
+    async def test_on_command_error_command_not_found_perm_dm_silent(self):
+        """F1: a typo'd !perm command via DM must not touch ctx.author.guild_permissions
+        (a discord.User in a DM has no such attribute) or respond -- CommandNotFound
+        fires before check_guild ever runs, so this branch must origin-check itself."""
+        from src import bot as bot_module
+        from discord.ext import commands
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.message.content = "!perm badsubcmd"
+        ctx.guild = None
+        del ctx.author.guild_permissions  # a bare MagicMock would auto-create it and mask the bug
+        error = commands.CommandNotFound("perm badsubcmd")
+        await bot_module.on_command_error(ctx, error)
+        ctx.send.assert_not_called()
+
+    async def test_on_command_error_command_not_found_perm_foreign_guild_silent(self):
+        """F1: a typo'd !perm command from a foreign guild must not reply even from
+        an admin -- replying would leak the bot's presence there, the exact leak M4
+        prevents for registered commands."""
+        from src import bot as bot_module
+        from discord.ext import commands
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.message.content = "!perm badsubcmd"
+        ctx.guild.id = 999
+        ctx.author.guild_permissions.administrator = True
+        error = commands.CommandNotFound("perm badsubcmd")
+        with patch.object(bot_module, "DISCORD_GUILD_ID", 123):
             await bot_module.on_command_error(ctx, error)
         ctx.send.assert_not_called()
 

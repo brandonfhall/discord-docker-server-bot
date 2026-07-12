@@ -53,21 +53,26 @@ class SilentCheckFailure(commands.CheckFailure):
     """
 
 
+def _origin_allowed(ctx) -> bool:
+    """True if ctx's guild/channel origin passes the same checks check_guild enforces.
+
+    Shared by check_guild (registered commands) and on_command_error's
+    CommandNotFound branch (unregistered/typo'd commands, which discord.py never
+    routes through @bot.check predicates) so the two can't drift apart.
+    """
+    if ctx.guild is None:
+        return False
+    if DISCORD_GUILD_ID and ctx.guild.id != DISCORD_GUILD_ID:
+        return False
+    if ALLOWED_CHANNEL_IDS and ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+        return False
+    return True
+
+
 @bot.check
 async def check_guild(ctx):
-    # Never accept commands via DM — permission checks are guild-role based and
-    # ctx.author has no guild_permissions/roles outside a guild context.
-    if ctx.guild is None:
+    if not _origin_allowed(ctx):
         raise SilentCheckFailure()
-
-    # If DISCORD_GUILD_ID is set, reject commands from other guilds
-    if DISCORD_GUILD_ID and ctx.guild.id != DISCORD_GUILD_ID:
-        raise SilentCheckFailure()
-
-    # If ALLOWED_CHANNEL_IDS is set, reject commands from other channels
-    if ALLOWED_CHANNEL_IDS and ctx.channel.id not in ALLOWED_CHANNEL_IDS:
-        raise SilentCheckFailure()
-
     return True
 
 
@@ -188,9 +193,13 @@ async def on_command_error(ctx, error):
         # For unknown commands, normally stay quiet to avoid noise.
         # However, special-case the permission management command so admins
         # get helpful usage feedback instead of silence.
+        # CommandNotFound fires before @bot.check predicates ever run (there's no
+        # command to prepare), so this branch must re-check the origin itself --
+        # ctx.author.guild_permissions doesn't exist in a DM, and skipping the
+        # origin check would let a typo'd !perm command leak the bot's presence
+        # in a foreign guild/channel the same way M4 prevents for real commands.
         content = ctx.message.content or ""
-        if content.startswith(f"{bot.command_prefix}perm"):
-            # Only respond with usage if the user is allowed to use this command.
+        if content.startswith(f"{bot.command_prefix}perm") and _origin_allowed(ctx):
             if ctx.author.guild_permissions.administrator:
                 await ctx.send("Usage: `!perm <add|remove|list> ...`")
     elif isinstance(error, commands.UserInputError):

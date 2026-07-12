@@ -3,7 +3,7 @@
 **Branch:** `Fable-review` · **Reviewed at commit:** `a8c82b8` · **Date:** 2026-07-11
 **Reviewer:** Claude Fable 5 (senior review pass) · **Implementers:** hand each finding to an implementing agent (Sonnet/Opus)
 **Status: all 22 findings implemented and committed as of `8442cd1`.** See the handoff section immediately below for a final-review entry point.
-**Final review (Fable, 2026-07-11): 20/22 verified clean; two follow-ups required — see "Final review" section below (F1: M3/M4 residual in the `CommandNotFound` branch; F2: L7+L12 reopened M1's dedup window).**
+**Final review (Fable, 2026-07-11): 20/22 verified clean; two follow-ups required — see "Final review" section below (F1: M3/M4 residual in the `CommandNotFound` branch — ✅ fixed; F2: L7+L12 reopened M1's dedup window — in progress).**
 
 This document is a handoff. Each finding is self-contained: location, root cause, failure scenario,
 a prescribed fix (with code sketches), tests to add, and acceptance criteria. Implementers should not
@@ -94,8 +94,8 @@ docker compose config --quiet                      # both compose files, if revi
 
 ## Final review — Fable, 2026-07-11 (post-implementation verification)
 
-**Verdict: 20 of 22 findings fully verified against the code at `685f455`. Two need a follow-up pass
-(F1, F2 below). Nothing needs to be reverted — both follow-ups are small, additive fixes.**
+**Verdict: 20 of 22 findings fully verified against the code at `685f455`. Two needed a follow-up pass
+(F1, F2 below) — both additive, no reverts. F1 is fixed; F2 is in progress.**
 
 Verification actually re-run on this box, not taken from the handoff's claims:
 - `pytest`: **188 passed**, ruff check + format both clean, `data/` stays empty across runs (L9 confirmed
@@ -112,7 +112,7 @@ Verification actually re-run on this box, not taken from the handoff's claims:
 - Handoff says "pushed to origin/Fable-review" — true for the 10 fix commits; the final docs commit
   `685f455` is local-only (branch is ahead 1). Push before closing out.
 
-### F1 — M3/M4 residual: the `CommandNotFound` `!perm` branch bypasses every origin check — NEEDS FIX
+### F1 — M3/M4 residual: the `CommandNotFound` `!perm` branch bypasses every origin check ✅ FIXED
 
 - **Location:** [src/bot.py:187-195](src/bot.py) (`on_command_error`, `CommandNotFound` branch)
 - **Problem:** M3/M4's resolution claims DM/foreign-guild safety "by construction" because `check_guild`
@@ -150,6 +150,21 @@ Verification actually re-run on this box, not taken from the handoff's claims:
   auto-create the attribute and mask the bug) → no send, no raise; (b) foreign guild: `ctx.guild.id != 
   DISCORD_GUILD_ID` (patch it set), admin author → no send; (c) existing home-guild-admin test stays green.
 - **Acceptance:** all three pass; the three existing CommandNotFound tests unchanged.
+- **Resolution:** Extracted `_origin_allowed(ctx) -> bool` in [src/bot.py](src/bot.py) (the alternative
+  offered in this finding, taken to keep `check_guild` and the `CommandNotFound` branch from drifting
+  apart again) and had `check_guild` call it instead of inlining the three conditions. The
+  `CommandNotFound` `!perm` branch now calls `_origin_allowed(ctx)` before touching
+  `ctx.author.guild_permissions`, short-circuiting on DM/foreign-guild/disallowed-channel origins exactly
+  like `check_guild` does for registered commands. Updated the two existing admin/non-admin
+  `CommandNotFound` tests to set a valid origin (`ctx.guild.id`/`ctx.channel.id` matching, `DISCORD_GUILD_ID`
+  patched to 0) since they previously relied on `ALLOWED_CHANNEL_IDS=[]` alone and would otherwise now be
+  rejected by the new origin check on an unset `ctx.guild.id` MagicMock. Added
+  `test_on_command_error_command_not_found_perm_dm_silent` (DM: `ctx.guild = None`, `ctx.author`'s
+  `guild_permissions` attribute deleted via `del` rather than left as an auto-vivifying `MagicMock`, so the
+  test would actually fail on the old code instead of silently passing) and
+  `test_on_command_error_command_not_found_perm_foreign_guild_silent`. Updated the "Guild lock" bullet in
+  ARCHITECTURE.md to describe `_origin_allowed()` and explain why `CommandNotFound` needs its own call to
+  it. 190 tests pass, ruff clean.
 
 ### F2 — L7+L12 reopened the pending-op dedup window M1's design closed; ARCHITECTURE.md now documents an invariant the code no longer holds — NEEDS FIX
 
