@@ -150,17 +150,32 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         ctx.guild = MagicMock()
         ctx.guild.id = 999
         with patch.object(bot_module, "DISCORD_GUILD_ID", 123):
-            self.assertFalse(await bot_module.check_guild(ctx))
+            with self.assertRaises(bot_module.SilentCheckFailure):
+                await bot_module.check_guild(ctx)
 
     async def test_check_guild_wrong_channel(self):
         from src import bot as bot_module
 
         ctx = MagicMock()
-        ctx.guild = None
+        ctx.guild = MagicMock()
+        ctx.guild.id = 1
         ctx.channel.id = 456
         with patch.object(bot_module, "DISCORD_GUILD_ID", 0):
             with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", [100, 200]):
-                self.assertFalse(await bot_module.check_guild(ctx))
+                with self.assertRaises(bot_module.SilentCheckFailure):
+                    await bot_module.check_guild(ctx)
+
+    async def test_check_guild_dm_rejected_even_without_guild_lock(self):
+        """M3: a DM (ctx.guild is None) is rejected even when DISCORD_GUILD_ID is unset,
+        since ctx.author has no guild_permissions/roles outside a guild context."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.guild = None
+        with patch.object(bot_module, "DISCORD_GUILD_ID", 0):
+            with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
+                with self.assertRaises(bot_module.SilentCheckFailure):
+                    await bot_module.check_guild(ctx)
 
     async def test_perm_add_rejects_invalid_action(self):
         from src import bot as bot_module
@@ -442,7 +457,8 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         ctx = MagicMock()
         ctx.guild = None  # DM has no guild
         with patch.object(bot_module, "DISCORD_GUILD_ID", 42):
-            self.assertFalse(await bot_module.check_guild(ctx))
+            with self.assertRaises(bot_module.SilentCheckFailure):
+                await bot_module.check_guild(ctx)
 
     # --- resolve_container ---
 
@@ -604,17 +620,16 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
                 await bot_module.on_command_error(ctx, error)
 
     async def test_on_command_error_silent_in_disallowed_channel(self):
-        """CheckFailure from a disallowed channel should produce no response."""
+        """SilentCheckFailure (as raised by check_guild for a disallowed origin)
+        should produce no response."""
         from src import bot as bot_module
-        from discord.ext import commands
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.channel.id = 999
         ctx.command = MagicMock()
-        error = commands.CheckFailure("not allowed")
-        with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", [100, 200]):
-            await bot_module.on_command_error(ctx, error)
+        error = bot_module.SilentCheckFailure("not allowed")
+        await bot_module.on_command_error(ctx, error)
         ctx.send.assert_not_called()
 
     async def test_on_command_error_responds_in_allowed_channel(self):

@@ -70,7 +70,7 @@ A single lazily-constructed `_docker_client` is reused for the lifetime of the p
 - **Ping control:** The bot is constructed with `AllowedMentions.none()` so no handler can accidentally ping @everyone or arbitrary users. `send_announcement` explicitly passes `AllowedMentions(roles=True)` to re-enable only the configured role mention.
 - **Status API token** is compared with `secrets.compare_digest` to prevent timing attacks. The `/healthz` endpoint is intentionally unauthenticated — it is used by the Docker healthcheck and external uptime monitors.
 - **Log redaction** is implemented at the handler level (`_RedactingFilter` in [src/logging_config.py](src/logging_config.py)) so every handler strips `BOT_TOKEN` and `STATUS_TOKEN` — not just the root logger.
-- **Guild lock** (`DISCORD_GUILD_ID`) and **channel lock** (`ALLOWED_CHANNEL_IDS`) are enforced in a global `@bot.check`. Disallowed-channel rejections are silently ignored in `on_command_error` to avoid leaking the bot's presence.
+- **Guild lock** (`DISCORD_GUILD_ID`) and **channel lock** (`ALLOWED_CHANNEL_IDS`) are enforced in a global `@bot.check`. DMs (no guild), foreign-guild, and disallowed-channel commands all raise `SilentCheckFailure` — a `commands.CheckFailure` subclass `on_command_error` recognizes and silently ignores — so none of these origins get any response. A genuine role/permission denial in the home guild still gets the "you do not have permission" message.
 - **Admin bypass:** Discord's `Administrator` permission always short-circuits `has_permission` checks.
 
 ### Docker operations

@@ -190,7 +190,7 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
 - **Acceptance:** New tests pass; the four existing crash-alerting tests still pass unmodified (genuine
   crashes still alert).
 
-### M3 — Commands in DMs: permission-checked commands crash; `!status`/`!guide` answer anyone who shares a guild
+### M3 — Commands in DMs: permission-checked commands crash; `!status`/`!guide` answer anyone who shares a guild ✅ FIXED
 
 - **Category:** security / robustness
 - **Location:** [src/bot.py:47-57](src/bot.py) (`check_guild`), [src/bot.py:62](src/bot.py),
@@ -221,8 +221,10 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
   `check_guild` returns `False`.
 - **Acceptance:** New test passes; existing guild/channel-lock tests green; a DM'd command produces no
   response and no traceback.
+- **Resolution:** Implemented together with M4 (see below) — `check_guild` now raises `SilentCheckFailure`
+  for `ctx.guild is None` before any other check, so DMs never reach `has_permission`/`ctx.author.roles`.
 
-### M4 — Guild-lock rejections reply "You do not have permission…" in foreign guilds, leaking the bot's presence
+### M4 — Guild-lock rejections reply "You do not have permission…" in foreign guilds, leaking the bot's presence ✅ FIXED
 
 - **Category:** security / information disclosure (contradicts documented behavior)
 - **Location:** [src/bot.py:138-144](src/bot.py) (`on_command_error`), ARCHITECTURE.md "Guild lock" bullet
@@ -257,6 +259,16 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
 - **Acceptance:** Foreign-guild and disallowed-channel commands produce zero responses; real permission
   denials in the home guild still get the denial message; ARCHITECTURE.md bullet updated to say guild
   **and** channel rejections are silent.
+- **Resolution:** Added `SilentCheckFailure(commands.CheckFailure)` in [src/bot.py](src/bot.py). `check_guild`
+  now raises it for DM / foreign-guild / disallowed-channel origins instead of returning `False` or relying
+  on `on_command_error` to re-infer the reason from config. `on_command_error` checks `isinstance(error,
+  SilentCheckFailure)` first (silent return) before the generic `CheckFailure` branch (permission-denial
+  message); the old ad hoc `ALLOWED_CHANNEL_IDS` re-check inside the error handler was removed. Updated
+  three existing `check_guild` unit tests that asserted `assertFalse(...)` to `assertRaises(SilentCheckFailure)`
+  instead (the function's contract changed from return-False to raise-on-reject), added a new DM+unlocked-guild
+  test, and updated `test_on_command_error_silent_in_disallowed_channel` to construct a `SilentCheckFailure`
+  rather than a plain `CheckFailure` (mechanism changed from config-inference to exception type). Also updated
+  the "Guild lock" bullet in ARCHITECTURE.md. 164 tests pass, ruff clean.
 
 ### M5 — `/status` API: open by default, published on all interfaces, and it exposes logs + the permission map
 

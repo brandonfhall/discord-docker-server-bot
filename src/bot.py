@@ -44,15 +44,29 @@ bot = commands.Bot(
 )
 
 
+class SilentCheckFailure(commands.CheckFailure):
+    """Raised when the command origin (DM/guild/channel) is disallowed — never respond.
+
+    Kept distinct from a permission-denial CheckFailure so on_command_error can stay
+    silent for disallowed origins without leaking the bot's presence, while still
+    telling a user in the home guild that they lack the role for a command.
+    """
+
+
 @bot.check
 async def check_guild(ctx):
-    # If DISCORD_GUILD_ID is set, reject commands from other guilds or DMs
-    if DISCORD_GUILD_ID and (not ctx.guild or ctx.guild.id != DISCORD_GUILD_ID):
-        return False
+    # Never accept commands via DM — permission checks are guild-role based and
+    # ctx.author has no guild_permissions/roles outside a guild context.
+    if ctx.guild is None:
+        raise SilentCheckFailure()
+
+    # If DISCORD_GUILD_ID is set, reject commands from other guilds
+    if DISCORD_GUILD_ID and ctx.guild.id != DISCORD_GUILD_ID:
+        raise SilentCheckFailure()
 
     # If ALLOWED_CHANNEL_IDS is set, reject commands from other channels
     if ALLOWED_CHANNEL_IDS and ctx.channel.id not in ALLOWED_CHANNEL_IDS:
-        return False
+        raise SilentCheckFailure()
 
     return True
 
@@ -136,10 +150,11 @@ async def on_message(message):
 
 @bot.event
 async def on_command_error(ctx, error):
+    if isinstance(error, SilentCheckFailure):
+        # Disallowed origin (DM, foreign guild, or disallowed channel) — never respond,
+        # so as not to leak the bot's presence.
+        return
     if isinstance(error, commands.CheckFailure):
-        # If the command came from a disallowed channel, silently ignore it
-        if ALLOWED_CHANNEL_IDS and ctx.channel.id not in ALLOWED_CHANNEL_IDS:
-            return
         logging.warning(f"Permission denied for user {ctx.author} on command {ctx.command}")
         await ctx.send("You do not have permission to use this command.")
     elif isinstance(error, commands.MissingRequiredArgument):
