@@ -2,6 +2,9 @@
   "announce": [
     "ServerAdmin"
   ],
+  "cancel": [
+    "ServerAdmin"
+  ],
   "history": [
     "ServerAdmin"
   ],
