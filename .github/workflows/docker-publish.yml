@@ -25,6 +25,8 @@ jobs:
     permissions:
       contents: read
       packages: write
+    outputs:
+      tags: ${{ steps.meta.outputs.tags }}
 
     steps:
       - name: Checkout
@@ -85,6 +87,12 @@ jobs:
           IMAGE_NAME: ${{ env.IMAGE_NAME }}
           KEEP_N: 5
           IGNORE_TAGS: "latest,develop"
+          # Tags this very run just pushed (e.g. today's date tag) must never be
+          # pruned, no matter what Docker Hub's tags API reports for their
+          # last_updated -- it can lag a freshly-pushed tag by more than the time
+          # it takes this job to start, which previously caused the brand-new tag
+          # to sort as "oldest" and get deleted seconds after being published.
+          NEW_TAGS: ${{ needs.build-and-push.outputs.tags }}
           DRY_RUN: false
         run: |
           # 1. Authenticate with Docker Hub to get JWT
@@ -101,9 +109,17 @@ jobs:
           echo "Fetching tags for $IMAGE_NAME (sorted by date)..."
           TAGS=$(curl -s -H "Authorization: JWT ${TOKEN}" "https://hub.docker.com/v2/repositories/${IMAGE_NAME}/tags/?page_size=100&ordering=-last_updated" | jq -r '.results[].name')
 
-          # 3. Filter out ignored tags
-          # Convert comma-separated IGNORE_TAGS to regex alternation (e.g., "latest|develop")
-          IGNORE_REGEX="^($(echo "$IGNORE_TAGS" | tr ',' '|'))$"
+          # 3. Filter out ignored tags and this run's freshly-pushed tags. The
+          # latter matters even though they're also the newest by push time:
+          # Docker Hub's tags API can lag a same-run push by more than the time
+          # it takes this job to start, so relying on API-reported last_updated
+          # alone can make a tag pushed seconds ago sort as the oldest and get
+          # deleted -- confirmed happening in practice, not a hypothetical.
+          THIS_RUN_TAGS=$(echo "$NEW_TAGS" | sed -E "s#^${IMAGE_NAME}:##")
+          FULL_IGNORE=$(printf '%s\n%s\n' "$IGNORE_TAGS" "$THIS_RUN_TAGS" | tr ',' '\n' | grep -v '^$' | paste -sd, -)
+          echo "Protecting tags from pruning: $FULL_IGNORE"
+          # Convert comma-separated ignore list to regex alternation (e.g., "latest|develop|20260712")
+          IGNORE_REGEX="^($(echo "$FULL_IGNORE" | tr ',' '|'))$"
           CANDIDATE_TAGS=$(echo "$TAGS" | grep -vE "$IGNORE_REGEX" || true)
           
           # Skip the first N tags (keep-last)
