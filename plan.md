@@ -66,7 +66,7 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
   README/DOCKERHUB/.env.example updated. **Breaking change for existing deployments — call it out in the
   commit message body.**
 
-### H2 — Dockerfile pins `requests<2.32.0`, shipping a version with known CVEs; image deps diverge from CI-tested deps
+### H2 — Dockerfile pins `requests<2.32.0`, shipping a version with known CVEs; image deps diverge from CI-tested deps ✅ FIXED
 
 - **Category:** security / vulnerable dependency
 - **Location:** [Dockerfile:9-13](Dockerfile), [requirements.txt](requirements.txt)
@@ -92,6 +92,11 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
   surface and will catch API drift.
 - **Acceptance:** Image contains requests ≥ 2.32.4 (`docker run --rm bot-test pip show requests`);
   no version pins exist in the Dockerfile that aren't in requirements.txt; suite + smoke test green.
+- **Resolution:** Bumped `docker` to `7.2.0` in requirements.txt (confirmed via wheel metadata:
+  `Requires-Dist: requests>=2.26.0`, no upper bound). Added explicit `requests>=2.32.4` floor to
+  requirements.txt. Removed the workaround pin + comment from the Dockerfile. Verified locally: `pytest`
+  163 passed, `ruff check`/`ruff format --check` clean, Docker image built successfully, `pip show requests`
+  inside the image reports `2.34.2`, and the startup smoke test (`python -c "import src.bot"`) passed.
 
 ---
 
