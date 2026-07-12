@@ -305,7 +305,7 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
   rather than a plain `CheckFailure` (mechanism changed from config-inference to exception type). Also updated
   the "Guild lock" bullet in ARCHITECTURE.md. 164 tests pass, ruff clean.
 
-### M5 — `/status` API: open by default, published on all interfaces, and it exposes logs + the permission map
+### M5 — `/status` API: open by default, published on all interfaces, and it exposes logs + the permission map ✅ FIXED (docs-only, per maintainer decision)
 
 - **Category:** security / exposure defaults
 - **Location:** [src/api.py:29-34, 47-72, 76](src/api.py), [docker-compose.yml:41-42](docker-compose.yml),
@@ -332,6 +332,14 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
   with token → full payload. Otherwise docs-only, no tests.
 - **Acceptance:** Fresh `docker compose up` on a host exposes nothing off-box by default; README/
   DOCKERHUB updated consistently.
+- **Resolution:** Maintainer chose the docs-only path (option 3's code hardening was declined). Changed
+  `docker-compose.yml`'s port mapping to `127.0.0.1:8000:8000` with an inline comment explaining why and
+  how to widen it. `docker-compose.dev.yml` keeps `8000:8000` for local dev convenience per the finding's
+  own guidance, with a comment pointing at the production default. Updated DOCKERHUB.md's quick-start
+  port mapping and Security callout, and README's "HTTP Status API" section (payload contents spelled
+  out, header auth marked preferred) and Security section (loopback default + STATUS_TOKEN guidance).
+  Validated both compose files with `docker compose config --quiet`. 175 tests pass, ruff clean (no test
+  changes needed -- docs/compose only).
 
 ### M6 — Announcements re-enable pinging **all** roles; user-supplied maintenance reason can ping arbitrary roles ✅ FIXED
 

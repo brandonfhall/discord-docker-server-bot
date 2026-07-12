@@ -24,13 +24,13 @@ services:
       - DISCORD_GUILD_ID=your_guild_id
       - SHUTDOWN_DELAY=300
     ports:
-      - "8000:8000"
+      - "127.0.0.1:8000:8000" # loopback only -- see Security note below
 
 volumes:
   bot_data:
 ```
 
-> **Security:** The bot requires `/var/run/docker.sock` access, granting full Docker daemon control. Run only on trusted hosts and keep your tokens secret. `DISCORD_GUILD_ID` is required and locks the bot to a single server — without it, anyone able to invite the bot to a server they control would gain full container control there. For stricter deployments, see the [docker-socket-proxy hardening guide](https://github.com/brandonfhall/discord-docker-server-bot#hardening-restricting-docker-socket-access) in the README.
+> **Security:** The bot requires `/var/run/docker.sock` access, granting full Docker daemon control. Run only on trusted hosts and keep your tokens secret. `DISCORD_GUILD_ID` is required and locks the bot to a single server — without it, anyone able to invite the bot to a server they control would gain full container control there. The `/status` API includes recent log lines and the permission map; it's bound to the host's loopback by default and has no auth unless `STATUS_TOKEN` is set — set `STATUS_TOKEN` before changing the port mapping to expose it beyond localhost. For stricter Docker socket access, see the [docker-socket-proxy hardening guide](https://github.com/brandonfhall/discord-docker-server-bot#hardening-restricting-docker-socket-access) in the README.
 
 ## Environment Variables
 

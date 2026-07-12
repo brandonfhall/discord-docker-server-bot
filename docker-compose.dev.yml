@@ -38,6 +38,9 @@ services:
       retries: 3
       start_period: 15s
     ports:
+      # Bound wide open for local dev convenience. The /status API includes recent
+      # log lines and the permission map -- don't do this on a host reachable from
+      # the internet. See docker-compose.yml for the loopback-only production default.
       - "8000:8000"
 
 volumes:

@@ -40,7 +40,10 @@ services:
       retries: 3
       start_period: 15s
     ports:
-      - "8000:8000" # status endpoint
+      # Bound to the Docker host's loopback only -- the /status API includes recent
+      # log lines and the permission map, and STATUS_TOKEN is not set by default.
+      # Change to "8000:8000" (and set STATUS_TOKEN) to expose it beyond localhost.
+      - "127.0.0.1:8000:8000"
 
 volumes:
   bot_data:
