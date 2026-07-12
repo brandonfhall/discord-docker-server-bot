@@ -404,11 +404,15 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
 
 ## LOW (batch these; several touch the same files)
 
-### L1 — `/status` accepts the token as a query parameter
+### L1 — `/status` accepts the token as a query parameter ✅ FIXED
 [src/api.py:26-32](src/api.py). Query strings land in proxy/access logs and browser history. Keep header
 auth as primary; either drop the query param (breaking — check with maintainer) or keep it and add a
 README note that the header form is preferred. If dropped, update
 `tests/test_api.py::test_status_accepts_token_via_query_param`.
+- **Resolution:** Maintainer chose to keep the query param (no breaking change) and document the header
+  form as preferred. This was folded into the M5 commit's README update (the "HTTP Status API" section
+  now reads "Header: `X-Auth-Token: <token>` (preferred — doesn't land in proxy/access logs)"). No code or
+  test changes.
 
 ### L2 — `RedactingFilter` doesn't redact exception tracebacks ✅ FIXED
 [src/logging_config.py:15-22](src/logging_config.py). Only `record.getMessage()` is redacted; a token
@@ -513,14 +517,16 @@ Test in `TestPendingOps`.
   fix (it's in a different test class than the ones M1 touched) and was only passing because it didn't
   assert past the first message; now fixed and given a real assertion. 188 tests pass, ruff clean.
 
-### L8 — Compose healthchecks hardcode port 8000
+### L8 — Compose healthchecks hardcode port 8000 ✅ FIXED
 [docker-compose.yml:35-40](docker-compose.yml), [docker-compose.dev.yml:33-38](docker-compose.dev.yml).
 `STATUS_PORT` is passed through as an env var, but the compose healthcheck probes 8000 regardless →
 set `STATUS_PORT=9000` and the container reports permanently unhealthy. The Dockerfile HEALTHCHECK
 already expands `${STATUS_PORT:-8000}` correctly. Simplest fix: delete the compose-level healthchecks and
 let the image's HEALTHCHECK apply (it also hits `/healthz` properly instead of a bare TCP connect).
+- **Resolution:** Removed the `healthcheck:` block from both compose files, with a comment pointing at
+  the Dockerfile's own HEALTHCHECK. Validated both files with `docker compose config --quiet`.
 
-### L9 — Test hygiene: `conftest` doesn't reset `pending_op_info`; importing `src.bot` writes `data/bot.log` into the repo
+### L9 — Test hygiene: `conftest` doesn't reset `pending_op_info`; importing `src.bot` writes `data/bot.log` into the repo ✅ FIXED
 [tests/conftest.py:14-24](tests/conftest.py): `_reset_state` clears `pending_ops` but not
 `pending_op_info` (verified: some test classes clear it manually as a workaround — remove those lines
 when fixing). Add `state.pending_op_info.clear()` to both sides of the fixture.
@@ -528,26 +534,52 @@ when fixing). Add `state.pending_op_info.clear()` to both sides of the fixture.
 `data/bot.log` in the working tree. Cheap fix: `os.environ.setdefault("LOG_FILE", ...)` a tmp path in
 conftest before `src` imports. (Moving `setup_logging` into `main()` is cleaner but changes startup
 ordering — implementer's call; if moved, module-level code that logs before `main()` loses handlers.)
+- **Resolution:** Added `state.pending_op_info.clear()` to both sides of `_reset_state` in
+  [tests/conftest.py](tests/conftest.py); removed the now-redundant manual `pending_op_info.clear()` calls
+  from `TestPendingOps` and `TestCancelCommand` in `tests/test_bot_commands.py` (left `test_state.py`'s
+  `TestCancelPending` alone -- it's testing `state.py` directly and its own setUp/tearDown is legitimate
+  self-contained unit-test hygiene, not a workaround). Set `LOG_FILE` to a tmp path via
+  `os.environ.setdefault` in conftest, using the cheap fix rather than moving `setup_logging()` into
+  `main()`. **Found and fixed the same problem for `HISTORY_FILE` while implementing this** (not in the
+  original finding's text, but the identical root cause): several tests call unmocked `history.record`,
+  which was writing real entries into `data/history.json` on every test run (confirmed: the file had grown
+  to 1201 lines / 37KB before this fix). Added the same tmp-path pattern for `HISTORY_FILE`. Verified
+  `data/` stays empty across repeated test runs.
 
-### L10 — CLAUDE.md references `review.md §1.3`, which doesn't exist (never committed)
+### L10 — CLAUDE.md references `review.md §1.3`, which doesn't exist (never committed) ✅ FIXED
 [CLAUDE.md](CLAUDE.md) house rule: *"Don't weaken `_VALID_CONTAINER_NAME` or `_VALID_MSG_CHARS` without
 reading review.md §1.3 first."* `git log -- review.md` is empty — the file never existed in history. An
 implementing agent told to consult it will dead-end. Replace the pointer with the actual rationale
 inline (one sentence: the message whitelist is what makes the `/bin/sh -c` template path safe; widening
 it to quotes/`$`/backticks reopens shell injection via `!announce`) or with a pointer to this file's M7.
+- **Resolution:** Replaced the dead link with the inline rationale, exactly as prescribed, in
+  [CLAUDE.md](CLAUDE.md). Confirmed no other `review.md` references exist anywhere in the repo.
 
-### L11 — `requirements.txt` ships `httpx` in the production image
+### L11 — `requirements.txt` ships `httpx` in the production image ✅ FIXED
 `httpx` is only used by FastAPI's `TestClient` in tests. Move it (plus `pytest`/`pytest-cov`/`ruff`,
 which CI installs ad hoc) to a `requirements-dev.txt`, update
 [.github/workflows/tests-reusable.yml:20-24](.github/workflows/tests-reusable.yml) to install both files,
 and drop `httpx` from the image. Slims the image and its dependabot surface.
+- **Resolution:** Removed `httpx` from [requirements.txt](requirements.txt); created
+  [requirements-dev.txt](requirements-dev.txt) (`-r requirements.txt` plus `httpx`, `pytest`,
+  `pytest-cov`, `ruff`). Updated the CI workflow's install step to a single `pip install -r
+  requirements-dev.txt`. Updated README's "Running Tests" section and CLAUDE.md's "Common commands" to
+  reference it. Verified: `pip install -r requirements-dev.txt` resolves cleanly, rebuilt the Docker image
+  and confirmed `pip show httpx` reports "Package(s) not found" inside it, and the startup smoke test still
+  passes.
 
-### L12 — Sync file I/O on the event loop in handlers
+### L12 — Sync file I/O on the event loop in handlers ✅ FIXED
 `history.record` (read+write JSON under a `threading.Lock`) and `permissions._load`/`_save` run directly
 in async handlers. Files are small (≤200 entries) so this is latency noise today, but it contradicts the
 spirit of the `run_blocking()` house rule. When convenient: `await docker_control.run_blocking(history.record, ...)`
 in handlers (the lock already makes it thread-safe). Low urgency; don't refactor permissions caching for
 this.
+- **Resolution:** Wrapped all 11 `history.record(...)` call sites in [src/bot.py](src/bot.py) with
+  `await docker_control.run_blocking(history.record, ...)`, exactly as prescribed. Left `permissions.py`'s
+  internal caching untouched per the finding's own instruction. Updated two tests whose assertions
+  depended on the exact `run_blocking` call count/sequence (`test_stop_now_sends_announcements`'s
+  `func_names` list gained a leading `"record"` entry; `test_logs_command_with_line_count` now checks the
+  specific `container_logs` call via `assert_any_call` instead of asserting a single total call).
 
 ### L13 — Cosmetic polish (fold into any nearby PR) ✅ FIXED
 - `_format_delay(90)` → "1 minute" (drops 30 s) — [src/bot.py:230-235](src/bot.py); include remainder

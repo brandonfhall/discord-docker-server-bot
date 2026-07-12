@@ -733,7 +733,6 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
 
         self.bot_module = bot_module
         state.pending_ops.clear()
-        state.pending_op_info.clear()
         state.maintenance_mode = False
 
     def tearDown(self):
@@ -741,7 +740,6 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
             if asyncio.isfuture(task) and not task.done():
                 task.cancel()
         state.pending_ops.clear()
-        state.pending_op_info.clear()
 
     async def test_stop_rejects_duplicate_when_pending(self):
         """!stop while a task is already pending should send a rejection message."""
@@ -1108,11 +1106,12 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         announcement = ctx.channel.send.call_args[0][0]
         self.assertIn("NOW", announcement)
 
-        # L7's pre-flight check runs first; in-game announcement was called
-        # before stop; the crash-alerting baseline (container_status) is
-        # re-seeded after a successful stop (M2).
+        # L12: history.record now goes through run_blocking too, first; then
+        # L7's pre-flight check; then in-game announcement before stop; then
+        # the crash-alerting baseline (container_status) re-seeded after a
+        # successful stop (M2).
         func_names = [c[0] for c in run_blocking_calls]
-        self.assertEqual(func_names, ["container_status", "announce_in_game", "stop_container", "container_status"])
+        self.assertEqual(func_names, ["record", "container_status", "announce_in_game", "stop_container", "container_status"])
 
     async def test_stop_now_reseeds_crash_alerting_baseline(self):
         """M2: a successful !stop now must update state.last_known_status so the
@@ -1389,8 +1388,9 @@ class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
             with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="output")) as mock_rb:
                 await bot_module.logs_cmd.callback(ctx, arg1="10", arg2=None)
-        # Verify the line count was passed through
-        mock_rb.assert_called_once()
+        # L12: run_blocking is also used for history.record now, so check the
+        # specific container_logs call rather than asserting a single call.
+        mock_rb.assert_any_call(docker_control.container_logs, "server1", 10)
 
     async def test_logs_command_no_output(self):
         from src import bot as bot_module
@@ -1748,11 +1748,6 @@ class TestCancelCommand(unittest.IsolatedAsyncioTestCase):
         from src import bot as bot_module
 
         self.bot_module = bot_module
-        state.pending_op_info.clear()
-
-    def tearDown(self):
-        state.pending_ops.clear()
-        state.pending_op_info.clear()
 
     async def test_cancel_no_pending_ops(self):
         bot_module = self.bot_module

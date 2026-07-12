@@ -12,6 +12,9 @@ Dockerized Python service that bridges Discord `!` commands to the Docker daemon
 ## Common commands
 
 ```bash
+# Install runtime + dev/test dependencies (pytest, pytest-cov, ruff, httpx)
+pip install -r requirements-dev.txt
+
 # Tests (no Docker daemon required — all Docker calls are mocked)
 PYTHONPATH=. pytest -v tests/
 
@@ -40,7 +43,7 @@ Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`, `DISCORD_GUILD_ID`) are set by
 - **All Docker SDK calls go through `run_blocking()`.** Never call `docker` SDK functions directly from an async handler — they're synchronous and will stall the event loop.
 - **All mutable cross-handler state belongs in `state.py`** (`BotState` singleton). Don't add new module-level globals in `bot.py`.
 - **Use the `Result` NamedTuple** in `docker_control.py` for operations with expected success/failure paths. Raise only on genuinely unexpected errors.
-- **Container names and announcement messages are validated at the `docker_control` layer,** not just at the command layer. Don't weaken `_VALID_CONTAINER_NAME` or `_VALID_MSG_CHARS` without reading [review.md §1.3](review.md) first.
+- **Container names and announcement messages are validated at the `docker_control` layer,** not just at the command layer. Don't weaken `_VALID_CONTAINER_NAME` or `_VALID_MSG_CHARS`: the message whitelist is what makes the `/bin/sh -c` template path in `announce_in_game` safe — widening it to quotes, `$`, or backticks reopens shell injection via `!announce`.
 - **Log redaction is handler-level.** If you add a new secret env var, extend the token list passed to `setup_logging()` in [src/bot.py](src/bot.py).
 - **Don't use `asyncio.get_event_loop()`** in new code — it's deprecated. Use `asyncio.run()` or a dedicated thread for sync-launched services.
 

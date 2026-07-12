@@ -249,7 +249,7 @@ async def start(ctx, container_name: str = None):
     if not target:
         return
     logging.info(f"User {ctx.author} requested START for container '{target}'")
-    history.record(HISTORY_FILE, ctx.author, "start", target)
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "start", target)
     await ctx.send(f"Starting {target}...")
     res = await docker_control.run_blocking(docker_control.start_container, target)
     logging.info(f"START result for {ctx.author}: {res.message}")
@@ -305,7 +305,7 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
             await ctx.send(f"You do not have permission to use `!{action} now`.")
             return
         logging.info(f"User {ctx.author} requested immediate {action.upper()} for container '{target}'")
-        history.record(HISTORY_FILE, ctx.author, f"{action} now", target)
+        await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, f"{action} now", target)
         state.cancel_pending(target)
         if await _bail_if_not_running():
             return
@@ -330,7 +330,7 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
     if await _bail_if_not_running():
         return
 
-    history.record(HISTORY_FILE, ctx.author, action, target)
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, action, target)
     placeholder = bot.loop.create_future()
     state.pending_ops[target] = placeholder
     state.pending_op_info[target] = {"action": action, "scheduled_at": datetime.now(timezone.utc)}
@@ -418,7 +418,7 @@ async def cancel(ctx):
     """Cancels all pending stop/restart countdowns across every container."""
     cancelled = state.cancel_all_pending()
     logging.info(f"User {ctx.author} requested CANCEL of pending operations")
-    history.record(HISTORY_FILE, ctx.author, "cancel", "")
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "cancel", "")
     if not cancelled:
         await ctx.send("No pending stop/restart operations to cancel.")
         return
@@ -479,7 +479,7 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
         await ctx.send(f"Usage: `!announce <container_name> <message>`\nAvailable: {', '.join(ALLOWED_CONTAINERS)}")
         return
 
-    history.record(HISTORY_FILE, ctx.author, "announce", target)
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "announce", target)
     res = await docker_control.run_blocking(docker_control.announce_in_game, target, message)
     await ctx.send(f"Sent to {target}: {res.message}")
 
@@ -553,7 +553,7 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
     if not target:
         return
     logging.info(f"User {ctx.author} requested LOGS for container '{target}' ({lines} lines)")
-    history.record(HISTORY_FILE, ctx.author, f"logs {lines}", target)
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, f"logs {lines}", target)
     result = await docker_control.run_blocking(docker_control.container_logs, target, lines)
     if result is None:
         await ctx.send(f"Could not fetch logs for {target}.")
@@ -580,7 +580,7 @@ async def stats_cmd(ctx, container_name: str = None):
     if not target:
         return
     logging.info(f"User {ctx.author} requested STATS for container '{target}'")
-    history.record(HISTORY_FILE, ctx.author, "stats", target)
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "stats", target)
     data = await docker_control.run_blocking(docker_control.container_stats, target)
     if data is None:
         await ctx.send(f"Could not fetch stats for {target}.")
@@ -648,7 +648,7 @@ async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
         logging.info(f"User {ctx.author} enabled maintenance mode: {state.maintenance_reason}")
         if cancelled:
             logging.info(f"Cancelled pending operations for: {', '.join(cancelled)}")
-        history.record(HISTORY_FILE, ctx.author, "maintenance on", "")
+        await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "maintenance on", "")
         msg = f"Maintenance mode **enabled**. Reason: {state.maintenance_reason}"
         if cancelled:
             msg += f" Cancelled pending countdowns for: {', '.join(f'`{c}`' for c in cancelled)}."
@@ -658,7 +658,7 @@ async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
         state.maintenance_mode = False
         state.maintenance_reason = ""
         logging.info(f"User {ctx.author} disabled maintenance mode")
-        history.record(HISTORY_FILE, ctx.author, "maintenance off", "")
+        await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "maintenance off", "")
         await ctx.send("Maintenance mode **disabled**. All commands are available again.")
         await send_announcement(ctx, "**Maintenance mode ended.** All commands are available again.")
     else:
@@ -681,7 +681,7 @@ async def perm_add(ctx, action: str, *, role_name: str):
         return
     permissions.add_role(action, role_name)
     logging.info(f"User {ctx.author} ADDED role '{role_name}' to action '{action}'")
-    history.record(HISTORY_FILE, ctx.author, f"perm add {action} {role_name}", "")
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, f"perm add {action} {role_name}", "")
     await ctx.send(f"Added role {role_name} to {action}")
 
 
@@ -693,7 +693,7 @@ async def perm_remove(ctx, action: str, *, role_name: str):
         return
     permissions.remove_role(action, role_name)
     logging.info(f"User {ctx.author} REMOVED role '{role_name}' from action '{action}'")
-    history.record(HISTORY_FILE, ctx.author, f"perm remove {action} {role_name}", "")
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, f"perm remove {action} {role_name}", "")
     await ctx.send(f"Removed role {role_name} from {action}")
 
 

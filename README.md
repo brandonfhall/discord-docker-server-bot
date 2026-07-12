@@ -162,6 +162,7 @@ For internal architecture, module boundaries, and runtime model, see [ARCHITECTU
 ### Running Tests
 
 ```bash
+pip install -r requirements-dev.txt
 export PYTHONPATH=.
 pytest -v tests/
 ```
