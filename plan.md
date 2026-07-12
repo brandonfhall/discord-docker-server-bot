@@ -365,7 +365,7 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
   `[Object(id=ANNOUNCE_ROLE_ID)]` when set, `AllowedMentions.none()` (roles=False) otherwise. Updated the
   "Ping control" bullet in ARCHITECTURE.md. 174 tests pass, ruff clean.
 
-### M7 — `CONTAINER_MESSAGE_CMD` templates with any brace besides `{message}` crash `announce_in_game`
+### M7 — `CONTAINER_MESSAGE_CMD` templates with any brace besides `{message}` crash `announce_in_game` ✅ FIXED
 
 - **Category:** correctness / robustness
 - **Location:** [src/docker_control.py:184-187](src/docker_control.py)
@@ -386,6 +386,11 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
   `'tellraw @a {"text":"{message}"}'` → assert `announce_in_game` returns a `Result` and the exec cmd
   contains the substituted message with the other braces intact.
 - **Acceptance:** New test passes; the two existing announce tests pass unchanged.
+- **Resolution:** Replaced `.format(message=safe_msg)` with `.replace("{message}", safe_msg)` in
+  [src/docker_control.py](src/docker_control.py) `announce_in_game`, exactly as prescribed. Added
+  `test_announce_in_game_template_with_extra_braces` in `tests/test_docker_control.py` using a Minecraft
+  `tellraw` template with a JSON payload brace, asserting the exec command substitutes correctly instead
+  of raising. 175 tests pass, ruff clean.
 
 ---
 
