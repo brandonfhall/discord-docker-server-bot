@@ -1,0 +1,472 @@
+# Code Review Findings & Remediation Plan
+
+**Branch:** `Fable-review` · **Reviewed at commit:** `a8c82b8` · **Date:** 2026-07-11
+**Reviewer:** Claude Fable 5 (senior review pass) · **Implementers:** hand each finding to an implementing agent (Sonnet/Opus)
+
+This document is a handoff. Each finding is self-contained: location, root cause, failure scenario,
+a prescribed fix (with code sketches), tests to add, and acceptance criteria. Implementers should not
+need to re-investigate. Line numbers reference commit `a8c82b8`.
+
+**Baseline at review time (verify before starting, re-verify after every finding):**
+- `PYTHONPATH=. pytest -v tests/` → **163 passed** (use `.venv/Scripts/python.exe -m pytest` on the dev box)
+- `ruff check .` → clean · `ruff format --check .` → clean
+- House rules in [CLAUDE.md](CLAUDE.md) apply to every fix (Docker calls via `run_blocking()`, state in
+  `state.py`, `Result` NamedTuple, tests per the conventions table, README + DOCKERHUB.md updated when
+  the command surface or env vars change).
+
+**Severity legend:**
+- **HIGH** — exploitable trust/security gap or shipping known-vulnerable code; fix first.
+- **MEDIUM** — real correctness/security bug reachable in normal operation.
+- **LOW** — hardening, consistency, UX, or hygiene; batch these.
+
+---
+
+## HIGH
+
+### H1 — Multi-guild trust model: anyone who can invite the bot gets full container control
+
+- **Category:** security / privilege escalation
+- **Location:** [src/bot.py:47-57](src/bot.py) (`check_guild`), [src/bot.py:60-67](src/bot.py) (`has_permission`), [src/config.py:44](src/config.py), [.env.example:14](.env.example)
+- **Problem:** `DISCORD_GUILD_ID` defaults to `0` (unlocked). Three mechanisms compound:
+  1. Any Discord user can generate an OAuth invite URL for the bot's client ID and invite the bot into
+     a guild **they** own. Nothing stops the bot from operating there.
+  2. In their own guild they hold the Administrator permission, and `has_permission` short-circuits on
+     `ctx.author.guild_permissions.administrator` — full bypass of the role permission store.
+  3. Even without admin, permissions are matched by **role name** ([src/permissions.py:94-98](src/permissions.py)):
+     creating a role named `ServerAdmin` in any guild grants every default action.
+- **Failure scenario:** Bot is deployed with `DISCORD_GUILD_ID` unset (the `.env.example` default). A user
+  who shares any server with the bot grabs the client ID from the bot's profile, invites it to their own
+  throwaway guild, and issues `!stop now` / `!restart` against the real game servers. Full control, no
+  audit trail they can't fake a username around.
+- **Fix (prescribed):** Fail closed at startup rather than silently running unlocked.
+  1. In [src/config.py](src/config.py), after parsing `DISCORD_GUILD_ID`, add an explicit opt-out env var:
+     ```python
+     ALLOW_ANY_GUILD = (os.getenv("ALLOW_ANY_GUILD") or "").strip().lower() in ("1", "true", "yes")
+     if not DISCORD_GUILD_ID and not ALLOW_ANY_GUILD:
+         raise ValueError(
+             "DISCORD_GUILD_ID is not set. Anyone able to invite this bot to their own server "
+             "would gain container control. Set DISCORD_GUILD_ID, or set ALLOW_ANY_GUILD=true "
+             "to accept that risk explicitly."
+         )
+     ```
+  2. Follow the "Adding a new env var" checklist in CLAUDE.md for `ALLOW_ANY_GUILD` (config.py,
+     `.env.example`, README table, DOCKERHUB.md table). Not a secret; no redaction needed.
+  3. Move `DISCORD_GUILD_ID` from "optional" to "required (or explicit opt-out)" wording in README's
+     env table + Security section, and in DOCKERHUB.md's quick-start (it already shows it set — keep).
+  4. Note in README Security section that permissions are matched by role **name**, so the guild lock is
+     the boundary that makes that safe.
+- **Tests:** In `tests/test_config.py` (pattern: existing `TestNewConfig` uses `importlib.reload` with
+  patched env): (a) unset `DISCORD_GUILD_ID` + unset `ALLOW_ANY_GUILD` → `ValueError` on import;
+  (b) unset guild + `ALLOW_ANY_GUILD=true` → loads; (c) `DISCORD_GUILD_ID=123` → loads.
+  `tests/conftest.py` must set `DISCORD_GUILD_ID` (or `ALLOW_ANY_GUILD`) via `os.environ.setdefault`
+  next to `BOT_TOKEN` so the whole suite still imports. Also update the CI env block in
+  [.github/workflows/tests-reusable.yml:33-35](.github/workflows/tests-reusable.yml) and the smoke-test
+  `docker run` line 44 to pass one of them.
+- **Acceptance:** Startup refuses to run unlocked unless explicitly opted out; suite + smoke test green;
+  README/DOCKERHUB/.env.example updated. **Breaking change for existing deployments — call it out in the
+  commit message body.**
+
+### H2 — Dockerfile pins `requests<2.32.0`, shipping a version with known CVEs; image deps diverge from CI-tested deps
+
+- **Category:** security / vulnerable dependency
+- **Location:** [Dockerfile:9-13](Dockerfile), [requirements.txt](requirements.txt)
+- **Problem:** The image does `pip install "requests<2.32.0"` after installing requirements, forcing
+  requests 2.31.0. That predates the fix for **CVE-2024-35195** (`verify=False` persisting across a
+  `Session`, fixed in 2.32.0) and **CVE-2024-47081** (`.netrc` credential leak, fixed in 2.32.4). The
+  workaround targets [docker-py#3256](https://github.com/docker/docker-py/issues/3256), which was a
+  requests-2.32.0-era breakage that newer docker SDK releases resolved. Second problem: CI installs
+  `requirements.txt` **without** the pin, so unit tests exercise a different dependency set than the
+  shipped image — only the smoke test runs against what users actually get.
+- **Fix (prescribed):**
+  1. Bump `docker==7.1.0` in [requirements.txt](requirements.txt) to the latest release on PyPI
+     (check `pip index versions docker`; anything ≥ 7.1.0 released after mid-2024 supports requests ≥ 2.32).
+  2. Delete the extra `pip install "requests<2.32.0"` line and the workaround comment from the Dockerfile.
+  3. If reproducibility of transitive deps matters, add an explicit `requests>=2.32.4` line to
+     requirements.txt instead of leaving it floating — but do **not** re-pin below 2.32.
+  4. Rebuild and run the existing startup smoke test locally:
+     `docker build . -t bot-test && docker run --rm -e BOT_TOKEN=t -e ALLOWED_CONTAINERS=c -e DISCORD_GUILD_ID=1 bot-test python -c "import src.bot"`
+     (add the guild var if H1 lands first).
+- **Tests:** No new unit tests; the CI Docker build + startup smoke test in
+  [.github/workflows/tests-reusable.yml:40-44](.github/workflows/tests-reusable.yml) is the gate.
+  Run the full pytest suite after the docker SDK bump — `tests/test_docker_control.py` mocks the SDK
+  surface and will catch API drift.
+- **Acceptance:** Image contains requests ≥ 2.32.4 (`docker run --rm bot-test pip show requests`);
+  no version pins exist in the Dockerfile that aren't in requirements.txt; suite + smoke test green.
+
+---
+
+## MEDIUM
+
+### M1 — Pending-op race: a cancel/maintenance during the announcement phase is silently overwritten; an exception leaks the placeholder and bricks the container's stop/restart
+
+- **Category:** correctness / race condition
+- **Location:** [src/bot.py:269-298](src/bot.py) (`_delayed_container_op`, non-`now` path)
+- **Problem:** Two related defects around the placeholder `Future` inserted at line 274:
+  1. **Cancel is undone.** Between line 274 and line 298 the handler awaits `ctx.send`,
+     `send_announcement`, and `announce_in_game` (Docker exec — can take seconds). If `!cancel`,
+     `!stop now`, or `!maintenance on` runs in that window, `state.cancel_pending()` pops and cancels
+     the placeholder — but line 298 then **unconditionally** assigns the real countdown task. The
+     stop/restart proceeds even though the user was told it was cancelled (and even during maintenance
+     mode, since `do_operation` never re-checks it).
+  2. **Placeholder leak.** If any of those awaits raises (e.g. `ctx.send` → `discord.Forbidden`), the
+     placeholder Future stays in `state.pending_ops` forever and is never done, so `has_pending_op`
+     returns `True` permanently: every future `!stop`/`!restart` for that container is rejected as a
+     "duplicate" until the bot restarts or someone runs `!cancel`.
+  3. Cosmetic but fix together: `pending_op_info` is only set at line 297, so `!status` during the
+     announcement window hits the info-less fallback branch ([src/bot.py:367-368](src/bot.py)).
+- **Fix (prescribed):** Keep a reference to the placeholder; set `pending_op_info` alongside it; wrap the
+  announcement awaits; verify the placeholder is still ours before scheduling:
+  ```python
+  placeholder = bot.loop.create_future()
+  state.pending_ops[target] = placeholder
+  state.pending_op_info[target] = {"action": action, "scheduled_at": datetime.now(timezone.utc)}
+
+  try:
+      delay_str = _format_delay(SHUTDOWN_DELAY)
+      countdown_msg = countdown_msg_tpl.format(delay=delay_str)
+      await ctx.send(f"Server {target} will {action} in {delay_str} (countdown started).")
+      await send_announcement(ctx, countdown_msg)
+      await docker_control.run_blocking(docker_control.announce_in_game, target, countdown_msg)
+  except Exception:
+      if state.pending_ops.get(target) is placeholder:
+          state.cancel_pending(target)
+      raise
+
+  if state.pending_ops.get(target) is not placeholder or placeholder.cancelled():
+      await ctx.send(f"The scheduled {action} for `{target}` was cancelled before the countdown completed.")
+      return
+
+  state.pending_ops[target] = bot.loop.create_task(do_operation())
+  ```
+  Notes for the implementer: `scheduled_at` should be captured when the countdown message is computed so
+  `!status` remaining-time math stays right; `state.cancel_pending` already handles Futures
+  (`Future.cancel()` is valid). Don't move `history.record` — recording the *attempt* is correct.
+- **Tests:** In `tests/test_bot_commands.py` (patterns exist in `TestPendingOps`, which already tests the
+  post-registration duplicate at its `test_second_stop_rejected_after_first_registers_task`):
+  (a) make `send_announcement`'s `ctx.send` (or the mocked `announce_in_game`) raise → assert
+  `state.pending_ops` does not contain the target afterwards;
+  (b) simulate cancel-during-announcement: patch `announce_in_game`'s run_blocking mock with a side
+  effect that calls `state.cancel_all_pending()` → assert no task is scheduled, no countdown fires, and
+  the "was cancelled" message was sent;
+  (c) assert `!status` during the announcement phase (placeholder present, info set) reports the action
+  and remaining time.
+- **Acceptance:** All three new tests pass; existing `TestPendingOps`/`TestCancelCommand`/
+  `TestMaintenanceMode` tests unchanged and green.
+
+### M2 — Bot-initiated `!stop`/`!restart` triggers a false "Crash Alert"
+
+- **Category:** correctness / false alerting
+- **Location:** [src/bot.py:176-198](src/bot.py) (`crash_check_loop`), stop paths at
+  [src/bot.py:262](src/bot.py) (immediate) and [src/bot.py:287](src/bot.py) (`do_operation`)
+- **Problem:** `crash_check_loop` alerts on any `running → non-running` transition. Nothing updates
+  `state.last_known_status` when the **bot itself** stops a container, so every successful `!stop`
+  (immediate or countdown) is followed—within `CRASH_CHECK_INTERVAL` seconds—by
+  "**Crash Alert:** Container `X` is now **exited**". Confirmed: no code path outside the loop writes
+  `last_known_status`, and no test covers this (tests/test_crash_alerting.py treats every transition as
+  a crash).
+- **Failure scenario:** Admin runs `!stop`; 30 s later the announce channel gets a crash alert; operators
+  learn to ignore crash alerts, defeating the feature.
+- **Fix (prescribed):** After each successful bot-initiated container operation, re-seed the loop's
+  baseline. In `_delayed_container_op` (both the immediate path and inside `do_operation`) and in the
+  `start` handler, after `res`/`result` comes back with `success=True`:
+  ```python
+  state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
+  ```
+  This records `exited` after a stop (no alert) and `running` after start/restart. Do it via the status
+  call rather than hardcoding strings so restart landing back in `running` is captured accurately.
+  **Known residual race (accept it, document in a comment):** if the poll fires during the few seconds a
+  blocking `restart` is in flight it can still observe a transient non-running status. If the implementer
+  wants to close it fully, the pattern is a suppression window in `BotState`
+  (`self.alert_suppressed_until: dict[str, float]`) set before the op and checked in the loop — optional.
+- **Tests:** `tests/test_crash_alerting.py`: after simulating a bot-initiated stop (set
+  `state.last_known_status[name] = "exited"` the way the handler now does), run one loop iteration with
+  the container `exited` → assert **no** alert. In `tests/test_bot_commands.py` `TestStopNow`: assert
+  `state.last_known_status` is updated after a successful `!stop now`.
+- **Acceptance:** New tests pass; the four existing crash-alerting tests still pass unmodified (genuine
+  crashes still alert).
+
+### M3 — Commands in DMs: permission-checked commands crash; `!status`/`!guide` answer anyone who shares a guild
+
+- **Category:** security / robustness
+- **Location:** [src/bot.py:47-57](src/bot.py) (`check_guild`), [src/bot.py:62](src/bot.py),
+  [src/bot.py:170](src/bot.py), [src/permissions.py:97](src/permissions.py)
+- **Problem:** When `DISCORD_GUILD_ID` is unset and `ALLOWED_CHANNEL_IDS` is empty, `check_guild` passes
+  for DMs (`ctx.guild is None`). In a DM `ctx.author` is a `discord.User`, which has **no**
+  `guild_permissions` and **no** `roles` attributes:
+  - Permission-checked commands (`!stop`, `!start`, …) raise `AttributeError` inside the check → noisy
+    unhandled-error tracebacks in the logs on every attempt (fails closed, but ugly and log-spamming).
+  - Unchecked commands work: any user sharing any guild with the bot can DM `!status` / `!guide` and
+    read container states.
+  - Same latent `AttributeError` at [src/bot.py:170](src/bot.py) (`on_command_error`'s `!perm` branch)
+    if a `!perm` typo arrives via DM.
+- **Fix (prescribed):** Reject DMs globally, first thing in `check_guild`:
+  ```python
+  @bot.check
+  async def check_guild(ctx):
+      # Never accept commands via DM — permission checks are guild-role based.
+      if ctx.guild is None:
+          return False
+      ...
+  ```
+  This also makes every downstream `ctx.author.guild_permissions` / `.roles` access safe by construction.
+  (H1 reduces exposure but doesn't remove it: DMs from home-guild members would still hit this without
+  the explicit check.)
+- **Tests:** `tests/test_bot_commands.py` has `test_check_guild_dm_with_guild_restriction` covering the
+  locked case — add the sibling: `ctx.guild = None` with `DISCORD_GUILD_ID` **unset** →
+  `check_guild` returns `False`.
+- **Acceptance:** New test passes; existing guild/channel-lock tests green; a DM'd command produces no
+  response and no traceback.
+
+### M4 — Guild-lock rejections reply "You do not have permission…" in foreign guilds, leaking the bot's presence
+
+- **Category:** security / information disclosure (contradicts documented behavior)
+- **Location:** [src/bot.py:138-144](src/bot.py) (`on_command_error`), ARCHITECTURE.md "Guild lock" bullet
+- **Problem:** `on_command_error` only stays silent for `CheckFailure` when the **channel** lock rejected
+  the command. When the **guild** lock (`DISCORD_GUILD_ID` set, command from another guild) rejects it —
+  and `ALLOWED_CHANNEL_IDS` is empty — control falls through to
+  `await ctx.send("You do not have permission to use this command.")`, in the foreign guild.
+  ARCHITECTURE.md claims disallowed origins are silently ignored; only the channel case is.
+- **Fix (prescribed):** Make the origin checks distinguishable from real permission denials with a custom
+  exception instead of inferring from config in the error handler:
+  ```python
+  class SilentCheckFailure(commands.CheckFailure):
+      """Raised when the command origin (guild/channel) is disallowed — never respond."""
+
+  @bot.check
+  async def check_guild(ctx):
+      if ctx.guild is None:                      # M3
+          raise SilentCheckFailure()
+      if DISCORD_GUILD_ID and ctx.guild.id != DISCORD_GUILD_ID:
+          raise SilentCheckFailure()
+      if ALLOWED_CHANNEL_IDS and ctx.channel.id not in ALLOWED_CHANNEL_IDS:
+          raise SilentCheckFailure()
+      return True
+  ```
+  In `on_command_error`, handle `SilentCheckFailure` (just `return`) **before** the generic
+  `CheckFailure` branch, and drop the now-redundant `ALLOWED_CHANNEL_IDS` re-check. Note
+  `perm_error` ([src/bot.py:638](src/bot.py)) already returns on `CheckFailure`; subclassing keeps that
+  correct. Implement M3+M4 together — they touch the same function.
+- **Tests:** `tests/test_bot_commands.py`: invoke `on_command_error` with a `SilentCheckFailure` →
+  `ctx.send` not called; with a plain `CheckFailure` (permission denial) → the denial message is sent.
+  Existing channel-lock silence test must stay green (behavior unchanged, mechanism different).
+- **Acceptance:** Foreign-guild and disallowed-channel commands produce zero responses; real permission
+  denials in the home guild still get the denial message; ARCHITECTURE.md bullet updated to say guild
+  **and** channel rejections are silent.
+
+### M5 — `/status` API: open by default, published on all interfaces, and it exposes logs + the permission map
+
+- **Category:** security / exposure defaults
+- **Location:** [src/api.py:29-34, 47-72, 76](src/api.py), [docker-compose.yml:41-42](docker-compose.yml),
+  [DOCKERHUB.md:26-27](DOCKERHUB.md)
+- **Problem:** Three defaults compound: `STATUS_TOKEN` unset ⇒ no auth (`verify_token` returns
+  immediately); uvicorn binds `0.0.0.0` (necessary inside a container); and both compose examples map
+  `"8000:8000"`, publishing on **every host interface**. The payload isn't just container states — it
+  includes the **last 50 log lines** (Discord usernames, user IDs, channel names, every command typed)
+  and the full **permission map** (role names per action). On a VPS with no firewall this is
+  internet-readable. The startup warning at [src/bot.py:119-120](src/bot.py) is good but easy to miss.
+- **Fix (prescribed):** Documentation/deployment-default change, not code:
+  1. Change the `ports` mapping in [docker-compose.yml](docker-compose.yml) and the DOCKERHUB.md
+     quick-start to `"127.0.0.1:8000:8000"`, with a comment: *"exposes the status API to the docker host
+     only; change to `8000:8000` and set STATUS_TOKEN to expose it beyond localhost"*.
+  2. README "HTTP Status API" + Security sections: state explicitly that `/status` includes recent log
+     lines and the permission map, and that `STATUS_TOKEN` should be considered required whenever the
+     port is reachable beyond localhost.
+  3. Optional code hardening (implementer's discretion): when `STATUS_TOKEN` is unset, omit `logs` and
+     `permissions` from the response and add `"note": "set STATUS_TOKEN to enable logs/permissions"`. If
+     taken, update `tests/test_api.py::test_status_returns_expected_structure` (it currently patches
+     `STATUS_TOKEN=None` and asserts the full open payload).
+  4. `docker-compose.dev.yml` may keep `8000:8000` (dev), but add the localhost note there too.
+- **Tests:** If option 3 is taken: unset-token → response has `containers` but not `logs`/`permissions`;
+  with token → full payload. Otherwise docs-only, no tests.
+- **Acceptance:** Fresh `docker compose up` on a host exposes nothing off-box by default; README/
+  DOCKERHUB updated consistently.
+
+### M6 — Announcements re-enable pinging **all** roles; user-supplied maintenance reason can ping arbitrary roles
+
+- **Category:** security / mention injection
+- **Location:** [src/bot.py:104](src/bot.py) (`send_announcement`), [src/bot.py:562](src/bot.py)
+  (maintenance reason interpolated into an announcement)
+- **Problem:** The bot is correctly constructed with `AllowedMentions.none()`, but `send_announcement`
+  passes `allowed_mentions=discord.AllowedMentions(roles=True)` — which re-enables mentions for **every
+  role**, not just `ANNOUNCE_ROLE_ID`. `!maintenance on <reason>` interpolates the free-text reason into
+  the announcement, so anyone with the `maintenance` permission can embed `<@&ROLE_ID>` and mass-ping any
+  role in the server (`@everyone`/user pings stay blocked by the client default merge — role pings are the
+  only gap).
+- **Fix (prescribed):** Scope the re-enable to exactly the configured role:
+  ```python
+  allowed = (
+      discord.AllowedMentions(roles=[discord.Object(id=ANNOUNCE_ROLE_ID)])
+      if ANNOUNCE_ROLE_ID
+      else discord.AllowedMentions.none()
+  )
+  await target_channel.send(content, allowed_mentions=allowed)
+  ```
+  (When `ANNOUNCE_ROLE_ID` is 0 the content contains no intentional mention, so `none()` is correct.)
+- **Tests:** `tests/test_bot_commands.py` has send_announcement coverage near
+  `test_send_announcement_send_failure_is_logged` — add: with `ANNOUNCE_ROLE_ID` patched to a value,
+  assert the `allowed_mentions` kwarg passed to `channel.send` has `roles == [Object(id=...)]` (compare
+  `.roles[0].id`); with it 0, assert an everything-off AllowedMentions.
+- **Acceptance:** New tests pass; a maintenance reason containing `<@&123>` renders as text, while the
+  configured announce role still pings. Update the "Ping control" bullet in ARCHITECTURE.md.
+
+### M7 — `CONTAINER_MESSAGE_CMD` templates with any brace besides `{message}` crash `announce_in_game`
+
+- **Category:** correctness / robustness
+- **Location:** [src/docker_control.py:184-187](src/docker_control.py)
+- **Problem:** The placeholder path calls `CONTAINER_MESSAGE_CMD.format(message=safe_msg)`. `str.format`
+  interprets **all** braces: a template like `rcon-cli tellraw @a {"text":"{message}"}` (Minecraft
+  tellraw — a realistic config) raises `KeyError: '"text"'`; a stray `{` raises `ValueError`. The call
+  happens **outside** the `try` at line 189, so it propagates out of `run_blocking` into the command
+  handlers as an unhandled error instead of a `Result`. Confirmed untested: docker_control tests only
+  cover a clean `{message}` template and the no-placeholder argv path.
+- **Fix (prescribed):** Replace, don't format:
+  ```python
+  if "{message}" in CONTAINER_MESSAGE_CMD:
+      cmd = ["/bin/sh", "-c", CONTAINER_MESSAGE_CMD.replace("{message}", safe_msg)]
+  ```
+  `safe_msg` cannot contain braces (`_VALID_MSG_CHARS` strips them), so `.replace` is exact and cannot
+  inject further placeholders. No behavior change for existing simple templates.
+- **Tests:** `tests/test_docker_control.py`: patch `CONTAINER_MESSAGE_CMD` to
+  `'tellraw @a {"text":"{message}"}'` → assert `announce_in_game` returns a `Result` and the exec cmd
+  contains the substituted message with the other braces intact.
+- **Acceptance:** New test passes; the two existing announce tests pass unchanged.
+
+---
+
+## LOW (batch these; several touch the same files)
+
+### L1 — `/status` accepts the token as a query parameter
+[src/api.py:26-32](src/api.py). Query strings land in proxy/access logs and browser history. Keep header
+auth as primary; either drop the query param (breaking — check with maintainer) or keep it and add a
+README note that the header form is preferred. If dropped, update
+`tests/test_api.py::test_status_accepts_token_via_query_param`.
+
+### L2 — `RedactingFilter` doesn't redact exception tracebacks
+[src/logging_config.py:15-22](src/logging_config.py). Only `record.getMessage()` is redacted; a token
+inside an exception message (`exc_info`) reaches handlers verbatim. Fix inside `filter()`:
+```python
+if record.exc_info and not record.exc_text:
+    import traceback
+    text = "".join(traceback.format_exception(*record.exc_info))
+    for token in self._tokens:
+        text = text.replace(token, "[REDACTED]")
+    record.exc_text = text
+    record.exc_info = None
+```
+(Formatters prefer `exc_text` when set.) Test in `tests/test_logging.py`: log an exception whose message
+contains the token; assert the formatted handler output has `[REDACTED]`.
+
+### L3 — No bounds validation on integer env vars
+[src/config.py:8-17](src/config.py). `CRASH_CHECK_INTERVAL=0` → `tasks.loop(seconds=0)` busy-loop
+hammering the Docker socket; `DOCKER_MAX_WORKERS=0` → `ThreadPoolExecutor` raises `ValueError` at import
+with a confusing traceback; negative `SHUTDOWN_DELAY`/`COMMAND_COOLDOWN` are nonsense. Add a
+`minimum: int | None = None` param to `_int_env` that falls back to the default (with the existing
+stderr warning) when `value < minimum`. Apply: `DOCKER_MAX_WORKERS` min 1, `CRASH_CHECK_INTERVAL` min 5,
+`SHUTDOWN_DELAY` min 0, `COMMAND_COOLDOWN` min 0, `STATUS_PORT` min 1. Tests in `tests/test_config.py`
+mirroring the existing invalid-int tests.
+
+### L4 — `!perm add`/`!perm remove` aren't recorded in the audit history
+[src/bot.py:582-601](src/bot.py). Permission changes are the most audit-worthy action the bot has.
+Add `history.record(HISTORY_FILE, ctx.author, f"perm add {action} {role_name}", "")` (and the remove
+equivalent) after the mutation. Test: assert `history.record` called (mock it as other handler tests do).
+
+### L5 — Maintenance exempt-set is half dead code; `!maintenance` lacks a cooldown
+[src/state.py:33-46](src/state.py), [src/bot.py:539-541](src/bot.py). The exempt set lists `guide`,
+`history`, and `perm*`, but those handlers never call `is_maintenance_active` — only
+start/stop/restart/announce/logs/stats do, so the entries are unreachable. Either add the check to those
+handlers (behavior-neutral: they're exempt) or shrink the set to what's real and comment why. Also
+`maintenance_cmd` is the only command without `@commands.cooldown`, contradicting CLAUDE.md's rule —
+add it or add a code comment stating why it's exempt (e.g. "must never be rate-limited during incidents"
+— that's a defensible choice; make it explicit).
+
+### L6 — Silent arg-parsing surprises in `!logs` and `!history`
+[src/bot.py:446-456](src/bot.py): `!logs tyop_container` ignores the unrecognized arg and serves the
+default container's logs — surprising for a typo. Track unmatched args and reply with usage instead.
+[src/bot.py:514](src/bot.py): `!history abc` raises `BadArgument`, which `on_command_error` doesn't
+handle → user gets silence. Add a `commands.BadArgument`/`commands.UserInputError` branch to
+`on_command_error` sending the generic usage line. Tests: one per behavior in `TestLogsCommand` /
+`TestHistoryCommand`.
+
+### L7 — Countdown/immediate ops announce before checking the container can actually stop
+[src/bot.py:252-265, 276-280](src/bot.py). `!stop` on an already-stopped container announces
+"shutting down in 5 minutes" in Discord and in-game, then 5 minutes later reports "not running".
+Cheap fix: call `container_status` (via `run_blocking`) after `resolve_container`; if the op is `stop`/
+`restart` and status isn't `running`, reply `Container X is not running.` and skip announcements.
+Test in `TestPendingOps`.
+
+### L8 — Compose healthchecks hardcode port 8000
+[docker-compose.yml:35-40](docker-compose.yml), [docker-compose.dev.yml:33-38](docker-compose.dev.yml).
+`STATUS_PORT` is passed through as an env var, but the compose healthcheck probes 8000 regardless →
+set `STATUS_PORT=9000` and the container reports permanently unhealthy. The Dockerfile HEALTHCHECK
+already expands `${STATUS_PORT:-8000}` correctly. Simplest fix: delete the compose-level healthchecks and
+let the image's HEALTHCHECK apply (it also hits `/healthz` properly instead of a bare TCP connect).
+
+### L9 — Test hygiene: `conftest` doesn't reset `pending_op_info`; importing `src.bot` writes `data/bot.log` into the repo
+[tests/conftest.py:14-24](tests/conftest.py): `_reset_state` clears `pending_ops` but not
+`pending_op_info` (verified: some test classes clear it manually as a workaround — remove those lines
+when fixing). Add `state.pending_op_info.clear()` to both sides of the fixture.
+[src/bot.py:33](src/bot.py): `setup_logging` runs at import time, so the test run creates/rotates
+`data/bot.log` in the working tree. Cheap fix: `os.environ.setdefault("LOG_FILE", ...)` a tmp path in
+conftest before `src` imports. (Moving `setup_logging` into `main()` is cleaner but changes startup
+ordering — implementer's call; if moved, module-level code that logs before `main()` loses handlers.)
+
+### L10 — CLAUDE.md references `review.md §1.3`, which doesn't exist (never committed)
+[CLAUDE.md](CLAUDE.md) house rule: *"Don't weaken `_VALID_CONTAINER_NAME` or `_VALID_MSG_CHARS` without
+reading review.md §1.3 first."* `git log -- review.md` is empty — the file never existed in history. An
+implementing agent told to consult it will dead-end. Replace the pointer with the actual rationale
+inline (one sentence: the message whitelist is what makes the `/bin/sh -c` template path safe; widening
+it to quotes/`$`/backticks reopens shell injection via `!announce`) or with a pointer to this file's M7.
+
+### L11 — `requirements.txt` ships `httpx` in the production image
+`httpx` is only used by FastAPI's `TestClient` in tests. Move it (plus `pytest`/`pytest-cov`/`ruff`,
+which CI installs ad hoc) to a `requirements-dev.txt`, update
+[.github/workflows/tests-reusable.yml:20-24](.github/workflows/tests-reusable.yml) to install both files,
+and drop `httpx` from the image. Slims the image and its dependabot surface.
+
+### L12 — Sync file I/O on the event loop in handlers
+`history.record` (read+write JSON under a `threading.Lock`) and `permissions._load`/`_save` run directly
+in async handlers. Files are small (≤200 entries) so this is latency noise today, but it contradicts the
+spirit of the `run_blocking()` house rule. When convenient: `await docker_control.run_blocking(history.record, ...)`
+in handlers (the lock already makes it thread-safe). Low urgency; don't refactor permissions caching for
+this.
+
+### L13 — Cosmetic polish (fold into any nearby PR)
+- `_format_delay(90)` → "1 minute" (drops 30 s) — [src/bot.py:230-235](src/bot.py); include remainder
+  seconds (`"1 minute 30 seconds"`) or round.
+- `!stop`'s immediate-path message renders as "Stopping" via `'ping' if action == 'stop'` string surgery —
+  [src/bot.py:259](src/bot.py); works but fragile if a third action is ever added; consider a
+  `verb` parameter alongside `action`.
+- `!status` records no history while the other read-only commands (`logs`, `stats`) do —
+  [src/bot.py:349-357](src/bot.py); pick one convention.
+
+---
+
+## Suggested implementation order
+
+Work in small PRs/commits; each finding independently testable. Re-run `ruff check . && ruff format --check .` and the full suite after each.
+
+1. **H2** (Dockerfile/requirements — isolated, unblocks a clean dependency baseline)
+2. **M3 + M4** together (same function), then **H1** (config + CI env changes; breaking, needs the
+   clearest commit message)
+3. **M1**, then **M2** (both in `_delayed_container_op`; M1 first because M2 adds lines inside the same paths)
+4. **M6**, **M7** (small, independent)
+5. **M5** (mostly docs; decide on the option-3 payload change before touching tests)
+6. **L-batch A (code):** L2, L3, L4, L5, L6, L7, L13
+7. **L-batch B (infra/docs/tests):** L1, L8, L9, L10, L11, L12
+
+Documentation sync required by CLAUDE.md when the above land: H1 (README, DOCKERHUB, .env.example),
+M4/M6 (ARCHITECTURE.md), M5 (README, DOCKERHUB, compose), L1/L8 (README), L10 (CLAUDE.md itself).
+
+## What's already solid (don't regress these)
+
+- Container-name allowlist enforced **inside** `docker_control`, not just at the command layer.
+- Message sanitizer whitelist + leading-hyphen strip + 100-char truncation; argv path preferred when no
+  placeholder; the `--` guidance in README for flag injection.
+- `AllowedMentions.none()` as the client default (M6 is a scoping fix, not a redesign).
+- `secrets.compare_digest` for the status token; unauthenticated `/healthz` kept separate deliberately.
+- Placeholder-future dedup concept for pending ops (M1 fixes its edges, keep the design).
+- Permissions file: 0o600 on create, mtime cache, corrupted-file self-heal, action backfill.
+- Handler-level log redaction (L2 extends it to tracebacks).
+- CI: reusable workflow, lint+format+coverage+image smoke test, CodeQL, grouped dependabot, docker-socket-proxy
+  hardening documented in README.
+- Test suite: 163 tests, disciplined mocking, autouse state-reset fixtures.
