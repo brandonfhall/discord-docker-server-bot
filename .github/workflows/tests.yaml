@@ -5,6 +5,9 @@ on:
     branches: [ "**" ]
   pull_request:
     branches: [ "main" ]
+  # Manual full run (including the Docker smoke test) on any branch, e.g. to
+  # pre-verify the image before opening a PR: gh workflow run tests.yaml --ref <branch>
+  workflow_dispatch:
 
 # Cancel any in-progress run for the same branch/PR when a newer commit arrives,
 # so rapid successive pushes don't queue up redundant runs. For a branch with an
@@ -24,5 +27,7 @@ jobs:
     with:
       # Branch pushes get the fast feedback loop (lint + tests only); the Docker
       # build + startup smoke test runs on the pre-merge gates — PRs to main and
-      # pushes to main — where image breakage must be caught.
-      docker-smoke: ${{ github.event_name == 'pull_request' || github.ref == 'refs/heads/main' }}
+      # pushes to main — and on manual dispatch. The "test / test" check this job
+      # reports is required by the main ruleset, so a PR can't merge until the
+      # full job (smoke test included) passes.
+      docker-smoke: ${{ github.event_name != 'push' || github.ref == 'refs/heads/main' }}
