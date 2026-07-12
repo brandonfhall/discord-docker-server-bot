@@ -113,7 +113,7 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
 
 ## MEDIUM
 
-### M1 — Pending-op race: a cancel/maintenance during the announcement phase is silently overwritten; an exception leaks the placeholder and bricks the container's stop/restart
+### M1 — Pending-op race: a cancel/maintenance during the announcement phase is silently overwritten; an exception leaks the placeholder and bricks the container's stop/restart ✅ FIXED
 
 - **Category:** correctness / race condition
 - **Location:** [src/bot.py:269-298](src/bot.py) (`_delayed_container_op`, non-`now` path)
@@ -168,6 +168,20 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
   and remaining time.
 - **Acceptance:** All three new tests pass; existing `TestPendingOps`/`TestCancelCommand`/
   `TestMaintenanceMode` tests unchanged and green.
+- **Resolution:** Implemented as prescribed in [src/bot.py](src/bot.py) `_delayed_container_op`: the
+  placeholder is captured in a local variable, `pending_op_info` is now set alongside it (before the
+  announcement awaits, not after), the announcement awaits are wrapped in try/except that cleans up the
+  placeholder and re-raises on failure, and a post-announcement identity check (`pending_ops.get(target)
+  is not placeholder or placeholder.cancelled()`) bails with a "was cancelled" message instead of
+  unconditionally scheduling the real countdown task. Added three new tests to `TestPendingOps` in
+  `tests/test_bot_commands.py`: exception-during-announcement cleanup, cancel-during-announcement
+  preventing scheduling, and an ordering test confirming `pending_op_info` is populated before the
+  announcement completes. Two existing tests in the same class (`test_stop_proceeds_and_registers_task_
+  when_no_pending_op`, `test_second_stop_rejected_after_first_registers_task`) needed their `mock_loop`
+  updated to return a real `asyncio.Future` from `create_future()` — the fix now calls `.cancelled()`/
+  `.done()` on the placeholder, which a bare `MagicMock` answers as truthy and would have broken the
+  happy path. Also added `state.pending_op_info.clear()` to `TestPendingOps`'s `setUp`/`tearDown` (the
+  class's own hygiene; the global conftest gap is still L9). 170 tests pass, ruff clean.
 
 ### M2 — Bot-initiated `!stop`/`!restart` triggers a false "Crash Alert"
 

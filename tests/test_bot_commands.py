@@ -657,6 +657,7 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
 
         self.bot_module = bot_module
         state.pending_ops.clear()
+        state.pending_op_info.clear()
         state.maintenance_mode = False
 
     def tearDown(self):
@@ -664,6 +665,7 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
             if asyncio.isfuture(task) and not task.done():
                 task.cancel()
         state.pending_ops.clear()
+        state.pending_op_info.clear()
 
     async def test_stop_rejects_duplicate_when_pending(self):
         """!stop while a task is already pending should send a rejection message."""
@@ -716,6 +718,9 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
             return mock_task
 
         mock_loop.create_task.side_effect = _create_task
+        # M1: the fix reads .cancelled()/.done() on the placeholder Future, so it
+        # must be a real Future rather than a bare MagicMock.
+        mock_loop.create_future.side_effect = asyncio.get_running_loop().create_future
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
@@ -754,6 +759,9 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
             return mock_task
 
         mock_loop.create_task.side_effect = _create_task
+        # M1: the fix reads .cancelled()/.done() on the placeholder Future, so it
+        # must be a real Future rather than a bare MagicMock.
+        mock_loop.create_future.side_effect = asyncio.get_running_loop().create_future
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
             with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
@@ -767,6 +775,103 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
 
         ctx2.send.assert_called_once()
         self.assertIn("already scheduled", ctx2.send.call_args[0][0].lower())
+
+    async def test_announcement_exception_cleans_up_placeholder(self):
+        """M1: if ctx.send (or another announcement step) raises while the countdown
+        is being announced, the pending_ops placeholder must not be left behind --
+        it would otherwise permanently block every future stop/restart for this
+        container (has_pending_op would never clear)."""
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock(side_effect=RuntimeError("discord hiccup"))
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+
+        mock_loop = MagicMock()
+        mock_loop.create_future.side_effect = asyncio.get_running_loop().create_future
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch.object(bot_module.bot, "loop", mock_loop):
+                        with self.assertRaises(RuntimeError):
+                            await bot_module.stop.callback(ctx, "test_container")
+
+        self.assertNotIn("test_container", state.pending_ops)
+        self.assertNotIn("test_container", state.pending_op_info)
+        mock_loop.create_task.assert_not_called()
+
+    async def test_cancel_during_announcement_prevents_scheduling(self):
+        """M1: if !cancel (or !stop now / !maintenance on) runs while the countdown
+        announcement for a prior !stop is still in flight, the real countdown task
+        must not be scheduled on top of a cancellation the user was already told
+        succeeded."""
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+
+        async def _send_and_cancel(*args, **kwargs):
+            state.cancel_all_pending()
+
+        ctx.channel.send = AsyncMock(side_effect=_send_and_cancel)
+
+        mock_loop = MagicMock()
+        mock_loop.create_future.side_effect = asyncio.get_running_loop().create_future
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch(
+                        "src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))
+                    ):
+                        with patch.object(bot_module.bot, "loop", mock_loop):
+                            await bot_module.stop.callback(ctx, "test_container")
+
+        mock_loop.create_task.assert_not_called()
+        self.assertNotIn("test_container", state.pending_ops)
+        last_msg = ctx.send.call_args_list[-1][0][0]
+        self.assertIn("cancelled", last_msg.lower())
+
+    async def test_pending_op_info_set_before_announcement_completes(self):
+        """M1 (ordering): pending_op_info must be populated before the countdown
+        announcement awaits complete, so !status reports an accurate action/remaining
+        time during that window instead of hitting the info-less fallback branch."""
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+
+        snapshot = {}
+
+        async def _capture_send(msg):
+            snapshot["info"] = dict(state.pending_op_info.get("test_container", {}))
+
+        ctx.send = AsyncMock(side_effect=_capture_send)
+
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        mock_loop = MagicMock()
+
+        def _create_task(coro):
+            coro.close()  # prevent "coroutine never awaited" warning
+            return mock_task
+
+        mock_loop.create_task.side_effect = _create_task
+        mock_loop.create_future.side_effect = asyncio.get_running_loop().create_future
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch(
+                        "src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "ok"))
+                    ):
+                        with patch.object(bot_module.bot, "loop", mock_loop):
+                            await bot_module.stop.callback(ctx, "test_container")
+
+        self.assertEqual(snapshot["info"].get("action"), "stop")
+        self.assertIn("scheduled_at", snapshot["info"])
 
 
 class TestStopNow(unittest.IsolatedAsyncioTestCase):

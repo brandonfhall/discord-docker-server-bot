@@ -286,13 +286,29 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
         return
 
     history.record(HISTORY_FILE, ctx.author, action, target)
-    state.pending_ops[target] = bot.loop.create_future()
+    placeholder = bot.loop.create_future()
+    state.pending_ops[target] = placeholder
+    state.pending_op_info[target] = {"action": action, "scheduled_at": datetime.now(timezone.utc)}
 
-    delay_str = _format_delay(SHUTDOWN_DELAY)
-    countdown_msg = countdown_msg_tpl.format(delay=delay_str)
-    await ctx.send(f"Server {target} will {action} in {delay_str} (countdown started).")
-    await send_announcement(ctx, countdown_msg)
-    await docker_control.run_blocking(docker_control.announce_in_game, target, countdown_msg)
+    try:
+        delay_str = _format_delay(SHUTDOWN_DELAY)
+        countdown_msg = countdown_msg_tpl.format(delay=delay_str)
+        await ctx.send(f"Server {target} will {action} in {delay_str} (countdown started).")
+        await send_announcement(ctx, countdown_msg)
+        await docker_control.run_blocking(docker_control.announce_in_game, target, countdown_msg)
+    except Exception:
+        # Don't leave a dead placeholder behind -- it would permanently block
+        # future stop/restart attempts on this container (has_pending_op never clears).
+        if state.pending_ops.get(target) is placeholder:
+            state.cancel_pending(target)
+        raise
+
+    # A !cancel / !stop now / !maintenance on that ran while we were awaiting the
+    # announcement above already popped and cancelled our placeholder. Don't
+    # schedule the real operation on top of a cancellation the user was told succeeded.
+    if state.pending_ops.get(target) is not placeholder or placeholder.cancelled():
+        await ctx.send(f"The scheduled {action} for `{target}` was cancelled before the countdown completed.")
+        return
 
     async def do_operation():
         await asyncio.sleep(SHUTDOWN_DELAY)
@@ -309,7 +325,6 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
             except Exception:
                 pass
 
-    state.pending_op_info[target] = {"action": action, "scheduled_at": datetime.now(timezone.utc)}
     state.pending_ops[target] = bot.loop.create_task(do_operation())
 
 
