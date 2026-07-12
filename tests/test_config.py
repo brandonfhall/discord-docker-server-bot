@@ -1,3 +1,4 @@
+import importlib
 import os
 import unittest
 from io import StringIO
@@ -82,3 +83,38 @@ class TestNewConfig(unittest.TestCase):
 
         self.assertIsInstance(config.HISTORY_FILE, str)
         self.assertTrue(config.HISTORY_FILE.endswith(".json"))
+
+
+class TestGuildLockRequired(unittest.TestCase):
+    """H1: config must fail closed unless DISCORD_GUILD_ID or ALLOW_ANY_GUILD is set."""
+
+    def tearDown(self):
+        # Restore config to the harness-standard state for every other test module.
+        os.environ["DISCORD_GUILD_ID"] = "123456789"
+        os.environ.pop("ALLOW_ANY_GUILD", None)
+        from src import config
+
+        importlib.reload(config)
+
+    def test_missing_guild_id_and_no_opt_out_raises(self):
+        from src import config
+
+        with patch.dict(os.environ, {"DISCORD_GUILD_ID": "", "ALLOW_ANY_GUILD": ""}):
+            with self.assertRaises(ValueError):
+                importlib.reload(config)
+
+    def test_missing_guild_id_with_opt_out_loads(self):
+        from src import config
+
+        with patch.dict(os.environ, {"DISCORD_GUILD_ID": "", "ALLOW_ANY_GUILD": "true"}):
+            importlib.reload(config)
+            self.assertEqual(config.DISCORD_GUILD_ID, 0)
+            self.assertTrue(config.ALLOW_ANY_GUILD)
+
+    def test_guild_id_set_loads_without_opt_out(self):
+        from src import config
+
+        with patch.dict(os.environ, {"DISCORD_GUILD_ID": "555", "ALLOW_ANY_GUILD": ""}):
+            importlib.reload(config)
+            self.assertEqual(config.DISCORD_GUILD_ID, 555)
+            self.assertFalse(config.ALLOW_ANY_GUILD)

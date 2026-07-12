@@ -43,6 +43,15 @@ LOG_FILE = os.getenv("LOG_FILE", "data/bot.log").strip()
 
 DISCORD_GUILD_ID = _int_env("DISCORD_GUILD_ID", 0)
 
+ALLOW_ANY_GUILD = (os.getenv("ALLOW_ANY_GUILD") or "").strip().lower() in ("1", "true", "yes")
+if not DISCORD_GUILD_ID and not ALLOW_ANY_GUILD:
+    raise ValueError(
+        "DISCORD_GUILD_ID is not set. Anyone able to invite this bot to their own server would "
+        "gain full container control (Discord Administrator in their own guild bypasses all "
+        "role-based permission checks). Set DISCORD_GUILD_ID to lock the bot to your server, or "
+        "set ALLOW_ANY_GUILD=true to explicitly accept that risk."
+    )
+
 ANNOUNCE_CHANNEL_ID = _int_env("ANNOUNCE_CHANNEL_ID", 0)
 
 ANNOUNCE_ROLE_ID = _int_env("ANNOUNCE_ROLE_ID", 0)

@@ -23,7 +23,7 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
 
 ## HIGH
 
-### H1 — Multi-guild trust model: anyone who can invite the bot gets full container control
+### H1 — Multi-guild trust model: anyone who can invite the bot gets full container control ✅ FIXED
 
 - **Category:** security / privilege escalation
 - **Location:** [src/bot.py:47-57](src/bot.py) (`check_guild`), [src/bot.py:60-67](src/bot.py) (`has_permission`), [src/config.py:44](src/config.py), [.env.example:14](.env.example)
@@ -65,6 +65,17 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
 - **Acceptance:** Startup refuses to run unlocked unless explicitly opted out; suite + smoke test green;
   README/DOCKERHUB/.env.example updated. **Breaking change for existing deployments — call it out in the
   commit message body.**
+- **Resolution:** Added `ALLOW_ANY_GUILD` to [src/config.py](src/config.py); raises `ValueError` at import
+  time if `DISCORD_GUILD_ID` is unset and `ALLOW_ANY_GUILD` isn't truthy. Confirmed via Docker: the
+  container fails to start without either var set, and starts cleanly with `DISCORD_GUILD_ID` set OR with
+  `ALLOW_ANY_GUILD=true`. Updated `tests/conftest.py` to set a default `DISCORD_GUILD_ID` for the whole
+  suite, added `TestGuildLockRequired` in `tests/test_config.py` (3 new tests using `importlib.reload` —
+  no existing reload-based config test pattern existed, so this establishes one), and updated the CI
+  `tests-reusable.yml` env block and Docker smoke-test line. Docs updated: README (Quick Start, env table,
+  Security section), DOCKERHUB.md (env table, Security callout), `.env.example`, both compose files'
+  environment passthrough lists, and CLAUDE.md's "Test env vars" line. 167 tests pass, ruff clean.
+  **This is a breaking change** — any existing deployment running without `DISCORD_GUILD_ID` set will
+  fail to start until the operator sets it or sets `ALLOW_ANY_GUILD=true`.
 
 ### H2 — Dockerfile pins `requests<2.32.0`, shipping a version with known CVEs; image deps diverge from CI-tested deps ✅ FIXED
 

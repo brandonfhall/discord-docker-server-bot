@@ -18,6 +18,7 @@ services:
       - SHUTDOWN_DELAY
       - LOG_LEVEL
       - DISCORD_GUILD_ID
+      - ALLOW_ANY_GUILD
       - PERMISSIONS_FILE
       - LOG_FILE
       - ANNOUNCE_CHANNEL_ID

@@ -24,7 +24,7 @@ A Discord bot that controls Docker containers (game servers, services, etc.) thr
 ## Quick Start
 
 ```bash
-cp .env.example .env   # fill in BOT_TOKEN and ALLOWED_CONTAINERS
+cp .env.example .env   # fill in BOT_TOKEN, ALLOWED_CONTAINERS, and DISCORD_GUILD_ID
 docker compose up -d --build
 ```
 
@@ -60,8 +60,9 @@ Enable **Developer Mode** in Discord (User Settings > Advanced) to copy IDs by r
 |---|---|---|---|
 | `BOT_TOKEN` | Yes | Discord bot token | — |
 | `ALLOWED_CONTAINERS` | Yes | Comma-separated container names to control | — |
+| `DISCORD_GUILD_ID` | Yes (or `ALLOW_ANY_GUILD`) | Discord server (guild) ID the bot is locked to | — |
+| `ALLOW_ANY_GUILD` | | Explicitly allow the bot to run without a guild lock — see [Security](#security) before setting this | `false` |
 | `DEFAULT_ALLOWED_ROLES` | | Roles allowed to use commands on first run | `ServerAdmin` |
-| `DISCORD_GUILD_ID` | | Lock bot to one Discord server | `0` (any) |
 | `ANNOUNCE_CHANNEL_ID` | | Channel for shutdown/restart announcements | `0` (command channel) |
 | `ANNOUNCE_ROLE_ID` | | Role to @mention during announcements | `0` (none) |
 | `ALLOWED_CHANNEL_IDS` | | Comma-separated channel IDs where commands work | (all) |
@@ -176,6 +177,7 @@ Mounts `src/` for live code updates (container restart required to pick up chang
 ## Security
 
 - The bot requires `/var/run/docker.sock` access, granting full Docker daemon control on the host. Run only on trusted hosts.
+- `DISCORD_GUILD_ID` locks the bot to a single Discord server and is required (set `ALLOW_ANY_GUILD=true` only if you understand the risk below). Without a guild lock, anyone able to invite the bot to a server they control would gain full container control there: role permissions are matched by **name**, and a Discord Administrator in that server always bypasses permission checks entirely.
 - Keep `BOT_TOKEN` and `STATUS_TOKEN` secret.
 - Container names are validated against a strict allowlist regex before any Docker call.
 - All announcement messages are sanitized before being passed to `exec_run`. See the [In-Game Announcements](#in-game-announcements) section for a note on argument injection in command templates.

@@ -32,7 +32,7 @@ docker compose -f docker-compose.dev.yml up --build
 docker build . --file Dockerfile --tag bot-test:latest
 ```
 
-Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`) are set by [tests/conftest.py](tests/conftest.py); don't re-set them in individual tests.
+Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`, `DISCORD_GUILD_ID`) are set by [tests/conftest.py](tests/conftest.py); don't re-set them in individual tests.
 
 ## House rules
 

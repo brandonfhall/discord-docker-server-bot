@@ -30,7 +30,7 @@ volumes:
   bot_data:
 ```
 
-> **Security:** The bot requires `/var/run/docker.sock` access, granting full Docker daemon control. Run only on trusted hosts and keep your tokens secret. For stricter deployments, see the [docker-socket-proxy hardening guide](https://github.com/brandonfhall/discord-docker-server-bot#hardening-restricting-docker-socket-access) in the README.
+> **Security:** The bot requires `/var/run/docker.sock` access, granting full Docker daemon control. Run only on trusted hosts and keep your tokens secret. `DISCORD_GUILD_ID` is required and locks the bot to a single server — without it, anyone able to invite the bot to a server they control would gain full container control there. For stricter deployments, see the [docker-socket-proxy hardening guide](https://github.com/brandonfhall/discord-docker-server-bot#hardening-restricting-docker-socket-access) in the README.
 
 ## Environment Variables
 
@@ -38,8 +38,8 @@ volumes:
 |---|---|---|---|
 | `BOT_TOKEN` | Yes | Discord bot token | — |
 | `ALLOWED_CONTAINERS` | Yes | Comma-separated container names to control | — |
+| `DISCORD_GUILD_ID` | Yes (or `ALLOW_ANY_GUILD`) | Discord server (guild) ID the bot is locked to | — |
 | `DEFAULT_ALLOWED_ROLES` | | Roles allowed to use commands on first run | `ServerAdmin` |
-| `DISCORD_GUILD_ID` | | Lock bot to one Discord server | `0` (any) |
 | `SHUTDOWN_DELAY` | | Seconds between announcement and stop/restart | `300` |
 | `CONTAINER_MESSAGE_CMD` | | Shell command for in-game messages (`{message}` placeholder) | `echo "Message: {message}"` |
 | `STATUS_TOKEN` | | Auth token for the `/status` HTTP API | (open) |
