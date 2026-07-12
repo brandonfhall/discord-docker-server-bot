@@ -2,6 +2,7 @@
 
 **Branch:** `Fable-review` · **Reviewed at commit:** `a8c82b8` · **Date:** 2026-07-11
 **Reviewer:** Claude Fable 5 (senior review pass) · **Implementers:** hand each finding to an implementing agent (Sonnet/Opus)
+**Status: all 22 findings implemented and committed as of `8442cd1`.** See the handoff section immediately below for a final-review entry point.
 
 This document is a handoff. Each finding is self-contained: location, root cause, failure scenario,
 a prescribed fix (with code sketches), tests to add, and acceptance criteria. Implementers should not
@@ -18,6 +19,75 @@ need to re-investigate. Line numbers reference commit `a8c82b8`.
 - **HIGH** — exploitable trust/security gap or shipping known-vulnerable code; fix first.
 - **MEDIUM** — real correctness/security bug reachable in normal operation.
 - **LOW** — hardening, consistency, UX, or hygiene; batch these.
+
+---
+
+## Handoff: final-review entry point
+
+Implemented by Sonnet 5 across 10 commits on `Fable-review` (pushed to `origin/Fable-review`), commit
+range `f29d843..8442cd1` (parent `ca6d6dc` is Fable's original plan.md commit). Final state: **188 tests
+passing** (up from 163 at review time), `ruff check` / `ruff format --check` both clean.
+
+**Commits, in order:**
+1. `f29d843` — H2 (requests CVE pin / docker SDK bump)
+2. `d00a237` — M3 + M4 (DM handling, silent guild/channel rejection)
+3. `a772c21` — H1 (require `DISCORD_GUILD_ID`, **breaking change**)
+4. `d2de940` — M1 (pending-op cancel race / placeholder leak)
+5. `c108fa8` — M2 (false crash alerts)
+6. `cbe0e25` — M6 (scoped announcement mentions)
+7. `41aaf0b` — M7 (`.replace()` instead of `.format()`)
+8. `2889349` — M5 (`/status` loopback binding, docs)
+9. `301b02a` — L-batch A (L2–L7, L13)
+10. `c0f188b` — L-batch B (L1, L8–L12)
+11. `8442cd1` — final documentation consistency pass (ARCHITECTURE.md, CLAUDE.md)
+
+**What a final review should focus on** (highest-value places to spend review time, rather than
+re-deriving what's already below): every finding's own `**Resolution:**` note documents exactly what
+was done and why, including several places where the implementation deliberately diverged from the
+prescribed fix after finding a concrete reason. Those deviations are the parts most worth a second pair
+of eyes:
+
+- **H1** is a breaking change: any deployment currently running without `DISCORD_GUILD_ID` set will
+  refuse to start. Confirm the commit message and README/DOCKERHUB changes communicate this clearly
+  enough for an operator upgrading blind.
+- **L7** was scoped to `!stop` only, excluding `!restart` — verified that Docker's `restart` legitimately
+  succeeds on a stopped container (starts it), so gating it on "must be running" would have been a
+  regression. Worth confirming that reasoning holds; it's the single largest deviation from the plan's
+  literal text in this batch.
+- **L5** replaced the prescribed "wire up the check in five more handlers" approach with simplifying
+  `is_maintenance_active` instead, after finding an existing test that encoded the old (dead) exempt set
+  as a contract at the state layer. Confirm the replacement test
+  (`test_maintenance_mode_does_not_block_guide_history_or_perm`) actually verifies the right thing.
+  Also, this — plus H1 and M3/M4 both editing `state.is_maintenance_active` and `check_guild` /
+  `on_command_error` — means `src/bot.py` and `src/state.py` accumulated changes from multiple findings
+  each; worth reading those two files fresh top-to-bottom rather than only diffing per-commit.
+- **M5** and **L1** were resolved per explicit maintainer decisions (docs-only for M5, keep-the-query-param
+  for L1) rather than the plan's own recommended default — both decisions were asked for and given via
+  `AskUserQuestion` mid-session, not assumed.
+- **L9** turned up a second, un-diagnosed instance of the same bug it was fixing: `HISTORY_FILE` had the
+  identical repo-pollution problem as `LOG_FILE` (confirmed `data/history.json` had grown to 1200+ lines
+  from unmocked test calls). Fixed using the same pattern, but it's not in Fable's original finding text —
+  worth confirming the fix is complete and no other env-var-backed file path has the same issue
+  (`PERMISSIONS_FILE` was checked and is not currently affected, but wasn't exhaustively audited).
+- **Two pre-existing gaps** unrelated to any specific finding were noticed and fixed in passing during the
+  final documentation pass: `TestHealthzEndpoint` (in `tests/test_api.py`) and `TestGuildLockRequired`
+  (new, from H1) were both missing from CLAUDE.md's test-conventions table.
+- **Not touched, by design:** `permissions.py`'s internal caching (L12 explicitly said not to refactor it),
+  the docker-socket-proxy hardening guide (already correct, no finding touched it), CodeQL/dependabot config.
+- **M2's residual race** (a crash-check poll firing during the few seconds a `restart` is actually in
+  flight, mid-transition) was left as an accepted, documented gap per the finding's own explicit guidance
+  — not a follow-up item, just worth knowing it's intentional if a reviewer notices it.
+
+**Verification commands to re-run before signing off:**
+```bash
+PYTHONPATH=. pytest -v tests/                      # expect 188 passed
+ruff check . && ruff format --check .              # expect clean
+docker build . --file Dockerfile --tag bot-test .  # expect success
+docker run --rm bot-test pip show requests httpx   # requests present (>=2.32.4), httpx absent
+docker run --rm -e BOT_TOKEN=t -e ALLOWED_CONTAINERS=c bot-test python -c "import src.bot"
+  # expect ValueError (DISCORD_GUILD_ID/ALLOW_ANY_GUILD required) -- confirms H1's fail-closed behavior
+docker compose config --quiet                      # both compose files, if reviewing them too
+```
 
 ---
 
