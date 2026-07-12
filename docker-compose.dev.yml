@@ -22,6 +22,7 @@ services:
       - SHUTDOWN_DELAY=10
       - LOG_LEVEL=DEBUG
       - DISCORD_GUILD_ID
+      - ALLOW_ANY_GUILD
       - ANNOUNCE_CHANNEL_ID
       - ANNOUNCE_ROLE_ID
       - ALLOWED_CHANNEL_IDS
@@ -30,13 +31,13 @@ services:
       - CRASH_CHECK_INTERVAL
       - CRASH_ALERT_CHANNEL_ID
       - HISTORY_FILE
-    healthcheck:
-      test: ["CMD-SHELL", "python -c 'import socket; socket.create_connection((\"localhost\", 8000), timeout=5)'"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 15s
+    # No compose-level healthcheck override -- the image's own HEALTHCHECK (Dockerfile)
+    # already expands ${STATUS_PORT:-8000} correctly and hits /healthz, so it stays
+    # correct even if STATUS_PORT is customized here.
     ports:
+      # Bound wide open for local dev convenience. The /status API includes recent
+      # log lines and the permission map -- don't do this on a host reachable from
+      # the internet. See docker-compose.yml for the loopback-only production default.
       - "8000:8000"
 
 volumes:

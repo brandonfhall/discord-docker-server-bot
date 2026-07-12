@@ -31,18 +31,14 @@ class BotState:
         return task is not None and not task.done()
 
     def is_maintenance_active(self, command_name: str) -> bool:
-        """Return True if maintenance mode blocks the given command."""
-        exempt = {
-            "maintenance",
-            "perm",
-            "perm add",
-            "perm remove",
-            "perm list",
-            "guide",
-            "history",
-        }
-        if command_name in exempt:
-            return False
+        """Return True if maintenance mode blocks the given command.
+
+        Only container-mutating commands (start, stop, restart, announce, logs,
+        stats) call this at all -- admin/read-only commands (maintenance itself,
+        perm*, guide, history) never do, so they remain available during
+        maintenance mode regardless of what's passed here. `command_name` is
+        accepted for parity with those call sites, not consulted.
+        """
         return self.maintenance_mode
 
 

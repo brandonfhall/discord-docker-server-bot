@@ -44,16 +44,35 @@ bot = commands.Bot(
 )
 
 
-@bot.check
-async def check_guild(ctx):
-    # If DISCORD_GUILD_ID is set, reject commands from other guilds or DMs
-    if DISCORD_GUILD_ID and (not ctx.guild or ctx.guild.id != DISCORD_GUILD_ID):
-        return False
+class SilentCheckFailure(commands.CheckFailure):
+    """Raised when the command origin (DM/guild/channel) is disallowed — never respond.
 
-    # If ALLOWED_CHANNEL_IDS is set, reject commands from other channels
+    Kept distinct from a permission-denial CheckFailure so on_command_error can stay
+    silent for disallowed origins without leaking the bot's presence, while still
+    telling a user in the home guild that they lack the role for a command.
+    """
+
+
+def _origin_allowed(ctx) -> bool:
+    """True if ctx's guild/channel origin passes the same checks check_guild enforces.
+
+    Shared by check_guild (registered commands) and on_command_error's
+    CommandNotFound branch (unregistered/typo'd commands, which discord.py never
+    routes through @bot.check predicates) so the two can't drift apart.
+    """
+    if ctx.guild is None:
+        return False
+    if DISCORD_GUILD_ID and ctx.guild.id != DISCORD_GUILD_ID:
+        return False
     if ALLOWED_CHANNEL_IDS and ctx.channel.id not in ALLOWED_CHANNEL_IDS:
         return False
+    return True
 
+
+@bot.check
+async def check_guild(ctx):
+    if not _origin_allowed(ctx):
+        raise SilentCheckFailure()
     return True
 
 
@@ -98,10 +117,19 @@ async def send_announcement(ctx, message: str):
         else:
             logging.warning(f"Configured ANNOUNCE_CHANNEL_ID {ANNOUNCE_CHANNEL_ID} not found.")
 
+    # Re-enable pinging only the configured announce role, never every role in the
+    # server -- a maintenance/announce message can contain user-supplied text, and
+    # AllowedMentions(roles=True) would let a stray "<@&other_role_id>" ping it too.
+    allowed_mentions = (
+        discord.AllowedMentions(roles=[discord.Object(id=ANNOUNCE_ROLE_ID)])
+        if ANNOUNCE_ROLE_ID
+        else discord.AllowedMentions.none()
+    )
+
     try:
         await target_channel.send(
             content,
-            allowed_mentions=discord.AllowedMentions(roles=True),
+            allowed_mentions=allowed_mentions,
         )
     except Exception as e:
         logging.error(f"Failed to send announcement to {target_channel}: {e}", exc_info=True)
@@ -136,10 +164,11 @@ async def on_message(message):
 
 @bot.event
 async def on_command_error(ctx, error):
+    if isinstance(error, SilentCheckFailure):
+        # Disallowed origin (DM, foreign guild, or disallowed channel) — never respond,
+        # so as not to leak the bot's presence.
+        return
     if isinstance(error, commands.CheckFailure):
-        # If the command came from a disallowed channel, silently ignore it
-        if ALLOWED_CHANNEL_IDS and ctx.channel.id not in ALLOWED_CHANNEL_IDS:
-            return
         logging.warning(f"Permission denied for user {ctx.author} on command {ctx.command}")
         await ctx.send("You do not have permission to use this command.")
     elif isinstance(error, commands.MissingRequiredArgument):
@@ -164,11 +193,20 @@ async def on_command_error(ctx, error):
         # For unknown commands, normally stay quiet to avoid noise.
         # However, special-case the permission management command so admins
         # get helpful usage feedback instead of silence.
+        # CommandNotFound fires before @bot.check predicates ever run (there's no
+        # command to prepare), so this branch must re-check the origin itself --
+        # ctx.author.guild_permissions doesn't exist in a DM, and skipping the
+        # origin check would let a typo'd !perm command leak the bot's presence
+        # in a foreign guild/channel the same way M4 prevents for real commands.
         content = ctx.message.content or ""
-        if content.startswith(f"{bot.command_prefix}perm"):
-            # Only respond with usage if the user is allowed to use this command.
+        if content.startswith(f"{bot.command_prefix}perm") and _origin_allowed(ctx):
             if ctx.author.guild_permissions.administrator:
                 await ctx.send("Usage: `!perm <add|remove|list> ...`")
+    elif isinstance(error, commands.UserInputError):
+        # Catch-all for argument-conversion failures (e.g. `!history abc`) that
+        # aren't a missing-argument case above -- usage instead of silent failure.
+        cmd = ctx.command.qualified_name if ctx.command else ""
+        await ctx.send(f"Usage: `!{cmd} ...` — see `!help` for details.")
     else:
         logging.error(f"Command error: {error}", exc_info=True)
 
@@ -220,22 +258,30 @@ async def start(ctx, container_name: str = None):
     if not target:
         return
     logging.info(f"User {ctx.author} requested START for container '{target}'")
-    history.record(HISTORY_FILE, ctx.author, "start", target)
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "start", target)
     await ctx.send(f"Starting {target}...")
     res = await docker_control.run_blocking(docker_control.start_container, target)
     logging.info(f"START result for {ctx.author}: {res.message}")
+    if res.success:
+        # Re-seed the crash-alerting baseline so the next poll doesn't see a
+        # stale "not running" status and fire a false crash alert.
+        state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
     await ctx.send(res.message)
 
 
 def _format_delay(seconds: int) -> str:
-    """Return a human-readable delay string (e.g. '5 minutes', '30 seconds')."""
+    """Return a human-readable delay string, e.g. '5 minutes', '30 seconds', or
+    '1 minute 30 seconds' (a bare minute count would silently drop the remainder)."""
     if seconds < 60:
         return f"{seconds} second{'s' if seconds != 1 else ''}"
-    minutes = seconds // 60
-    return f"{minutes} minute{'s' if minutes != 1 else ''}"
+    minutes, remainder = divmod(seconds, 60)
+    result = f"{minutes} minute{'s' if minutes != 1 else ''}"
+    if remainder:
+        result += f" {remainder} second{'s' if remainder != 1 else ''}"
+    return result
 
 
-async def _delayed_container_op(ctx, *args, action, now_action, docker_func, immediate_msg, countdown_msg_tpl):
+async def _delayed_container_op(ctx, *args, action, now_action, docker_func, immediate_msg, countdown_msg_tpl, verb):
     """Shared logic for stop and restart commands with optional 'now' flag."""
     if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
         await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
@@ -249,18 +295,38 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
     if not target:
         return
 
+    async def _bail_if_not_running() -> bool:
+        """For 'stop' only: reply and return True if the container isn't running.
+
+        Restarting a stopped container is valid (Docker's restart also starts
+        it), so this check does not apply to the 'restart' action.
+        """
+        if action != "stop":
+            return False
+        current_status = await docker_control.run_blocking(docker_control.container_status, target)
+        if current_status != "running":
+            await ctx.send(f"Container `{target}` is not running.")
+            return True
+        return False
+
     if now:
         if not ctx.author.guild_permissions.administrator and not permissions.is_member_allowed(now_action, ctx.author):
             await ctx.send(f"You do not have permission to use `!{action} now`.")
             return
         logging.info(f"User {ctx.author} requested immediate {action.upper()} for container '{target}'")
-        history.record(HISTORY_FILE, ctx.author, f"{action} now", target)
+        await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, f"{action} now", target)
         state.cancel_pending(target)
-        await ctx.send(f"{action.capitalize()}{'ping' if action == 'stop' else 'ing'} {target} immediately...")
+        if await _bail_if_not_running():
+            return
+        await ctx.send(f"{verb} {target} immediately...")
         await send_announcement(ctx, immediate_msg)
         await docker_control.run_blocking(docker_control.announce_in_game, target, immediate_msg)
         res = await docker_control.run_blocking(docker_func, target)
         logging.info(f"Immediate {action.upper()} result for {ctx.author}: {res.message}")
+        if res.success:
+            # Re-seed the crash-alerting baseline -- otherwise the next poll sees
+            # this bot-initiated stop/restart as an unexpected crash.
+            state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
         await ctx.send(f"{action.capitalize()} result: {res.message}")
         return
 
@@ -270,14 +336,41 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
         await ctx.send(f"A shutdown or restart is already scheduled for `{target}`. Ignoring duplicate request.")
         return
 
-    history.record(HISTORY_FILE, ctx.author, action, target)
-    state.pending_ops[target] = bot.loop.create_future()
+    # Insert the placeholder immediately after the dedup check above, before any
+    # further await -- _bail_if_not_running and history.record below both await,
+    # and two rapid !stop calls could otherwise both pass has_pending_op while
+    # interleaved at either one (F2: this is exactly what happened when those two
+    # awaits were inserted between the dedup check and the placeholder).
+    placeholder = bot.loop.create_future()
+    state.pending_ops[target] = placeholder
+    state.pending_op_info[target] = {"action": action, "scheduled_at": datetime.now(timezone.utc)}
 
-    delay_str = _format_delay(SHUTDOWN_DELAY)
-    countdown_msg = countdown_msg_tpl.format(delay=delay_str)
-    await ctx.send(f"Server {target} will {action} in {delay_str} (countdown started).")
-    await send_announcement(ctx, countdown_msg)
-    await docker_control.run_blocking(docker_control.announce_in_game, target, countdown_msg)
+    try:
+        if await _bail_if_not_running():
+            if state.pending_ops.get(target) is placeholder:
+                state.cancel_pending(target)
+            return
+
+        await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, action, target)
+
+        delay_str = _format_delay(SHUTDOWN_DELAY)
+        countdown_msg = countdown_msg_tpl.format(delay=delay_str)
+        await ctx.send(f"Server {target} will {action} in {delay_str} (countdown started).")
+        await send_announcement(ctx, countdown_msg)
+        await docker_control.run_blocking(docker_control.announce_in_game, target, countdown_msg)
+    except Exception:
+        # Don't leave a dead placeholder behind -- it would permanently block
+        # future stop/restart attempts on this container (has_pending_op never clears).
+        if state.pending_ops.get(target) is placeholder:
+            state.cancel_pending(target)
+        raise
+
+    # A !cancel / !stop now / !maintenance on that ran while we were awaiting the
+    # announcement above already popped and cancelled our placeholder. Don't
+    # schedule the real operation on top of a cancellation the user was told succeeded.
+    if state.pending_ops.get(target) is not placeholder or placeholder.cancelled():
+        await ctx.send(f"The scheduled {action} for `{target}` was cancelled before the countdown completed.")
+        return
 
     async def do_operation():
         await asyncio.sleep(SHUTDOWN_DELAY)
@@ -286,6 +379,10 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
         try:
             result = await docker_control.run_blocking(docker_func, target)
             logging.info(f"{action.upper()} execution result for {target}: {result.message}")
+            if result.success:
+                # Re-seed the crash-alerting baseline -- otherwise the next poll sees
+                # this bot-initiated stop/restart as an unexpected crash.
+                state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
             await ctx.send(f"{action.capitalize()} result: {result.message}")
         except Exception as e:
             logging.error(f"Error during scheduled {action} of {target}: {e}", exc_info=True)
@@ -294,7 +391,6 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
             except Exception:
                 pass
 
-    state.pending_op_info[target] = {"action": action, "scheduled_at": datetime.now(timezone.utc)}
     state.pending_ops[target] = bot.loop.create_task(do_operation())
 
 
@@ -311,6 +407,7 @@ async def stop(ctx, *args):
         docker_func=docker_control.stop_container,
         immediate_msg="Server is shutting down NOW. Please disconnect immediately.",
         countdown_msg_tpl="Server will shut down in {delay}. Please prepare to log off.",
+        verb="Stopping",
     )
 
 
@@ -327,6 +424,7 @@ async def restart(ctx, *args):
         docker_func=docker_control.restart_container,
         immediate_msg="Server is restarting NOW. Please disconnect immediately.",
         countdown_msg_tpl="Server will restart in {delay}. Please prepare to log off.",
+        verb="Restarting",
     )
 
 
@@ -337,7 +435,7 @@ async def cancel(ctx):
     """Cancels all pending stop/restart countdowns across every container."""
     cancelled = state.cancel_all_pending()
     logging.info(f"User {ctx.author} requested CANCEL of pending operations")
-    history.record(HISTORY_FILE, ctx.author, "cancel", "")
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "cancel", "")
     if not cancelled:
         await ctx.send("No pending stop/restart operations to cancel.")
         return
@@ -350,6 +448,9 @@ async def cancel(ctx):
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def status_cmd(ctx, container_name: str = None):
     """Checks the container status and any pending operations."""
+    # Deliberately not recorded to HISTORY_FILE, unlike logs/stats: !status is
+    # expected to be checked far more often (routine "is it up?" polling) and
+    # would otherwise flood the audit log with low-value entries.
     target = await resolve_container(ctx, container_name)
     if not target:
         return
@@ -395,7 +496,7 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
         await ctx.send(f"Usage: `!announce <container_name> <message>`\nAvailable: {', '.join(ALLOWED_CONTAINERS)}")
         return
 
-    history.record(HISTORY_FILE, ctx.author, "announce", target)
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "announce", target)
     res = await docker_control.run_blocking(docker_control.announce_in_game, target, message)
     await ctx.send(f"Sent to {target}: {res.message}")
 
@@ -447,6 +548,7 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
     """View recent container logs. Usage: !logs [container] [lines]"""
     container_name = None
     lines = 25
+    unrecognized = []
     for arg in (arg1, arg2):
         if arg is None:
             continue
@@ -454,6 +556,12 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
             lines = min(int(arg), 50)
         elif arg in ALLOWED_CONTAINERS:
             container_name = arg
+        else:
+            unrecognized.append(arg)
+
+    if unrecognized:
+        await ctx.send(f"Unrecognized argument(s): {', '.join(unrecognized)}. Usage: `!logs [container] [lines]`")
+        return
 
     if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
         await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
@@ -462,7 +570,7 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
     if not target:
         return
     logging.info(f"User {ctx.author} requested LOGS for container '{target}' ({lines} lines)")
-    history.record(HISTORY_FILE, ctx.author, f"logs {lines}", target)
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, f"logs {lines}", target)
     result = await docker_control.run_blocking(docker_control.container_logs, target, lines)
     if result is None:
         await ctx.send(f"Could not fetch logs for {target}.")
@@ -489,7 +597,7 @@ async def stats_cmd(ctx, container_name: str = None):
     if not target:
         return
     logging.info(f"User {ctx.author} requested STATS for container '{target}'")
-    history.record(HISTORY_FILE, ctx.author, "stats", target)
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "stats", target)
     data = await docker_control.run_blocking(docker_control.container_stats, target)
     if data is None:
         await ctx.send(f"Could not fetch stats for {target}.")
@@ -538,6 +646,9 @@ async def history_cmd(ctx, count: int = 10):
 
 @bot.command(name="maintenance")
 @has_permission("maintenance")
+# Intentionally no @commands.cooldown: during an active incident an admin must be
+# able to toggle maintenance mode again immediately (e.g. on/off/on to adjust the
+# reason), without waiting out a per-user cooldown.
 async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
     """Toggle maintenance mode. Usage: !maintenance on/off [reason]"""
     if toggle is None:
@@ -554,7 +665,7 @@ async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
         logging.info(f"User {ctx.author} enabled maintenance mode: {state.maintenance_reason}")
         if cancelled:
             logging.info(f"Cancelled pending operations for: {', '.join(cancelled)}")
-        history.record(HISTORY_FILE, ctx.author, "maintenance on", "")
+        await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "maintenance on", "")
         msg = f"Maintenance mode **enabled**. Reason: {state.maintenance_reason}"
         if cancelled:
             msg += f" Cancelled pending countdowns for: {', '.join(f'`{c}`' for c in cancelled)}."
@@ -564,7 +675,7 @@ async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
         state.maintenance_mode = False
         state.maintenance_reason = ""
         logging.info(f"User {ctx.author} disabled maintenance mode")
-        history.record(HISTORY_FILE, ctx.author, "maintenance off", "")
+        await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "maintenance off", "")
         await ctx.send("Maintenance mode **disabled**. All commands are available again.")
         await send_announcement(ctx, "**Maintenance mode ended.** All commands are available again.")
     else:
@@ -587,6 +698,7 @@ async def perm_add(ctx, action: str, *, role_name: str):
         return
     permissions.add_role(action, role_name)
     logging.info(f"User {ctx.author} ADDED role '{role_name}' to action '{action}'")
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, f"perm add {action} {role_name}", "")
     await ctx.send(f"Added role {role_name} to {action}")
 
 
@@ -598,6 +710,7 @@ async def perm_remove(ctx, action: str, *, role_name: str):
         return
     permissions.remove_role(action, role_name)
     logging.info(f"User {ctx.author} REMOVED role '{role_name}' from action '{action}'")
+    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, f"perm remove {action} {role_name}", "")
     await ctx.send(f"Removed role {role_name} from {action}")
 
 

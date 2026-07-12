@@ -1,3 +1,4 @@
+import importlib
 import os
 import unittest
 from io import StringIO
@@ -43,6 +44,27 @@ class TestConfig(unittest.TestCase):
         with patch.dict(os.environ, {"_BOT_TEST_INT": " 123 "}):
             self.assertEqual(self.config._int_env("_BOT_TEST_INT", 0), 123)
 
+    def test_int_env_below_minimum_falls_back_to_default(self):
+        """L3: a value below `minimum` is rejected the same way an invalid value is."""
+        with patch.dict(os.environ, {"_BOT_TEST_INT": "0"}):
+            result = self.config._int_env("_BOT_TEST_INT", 5, minimum=1)
+        self.assertEqual(result, 5)
+
+    def test_int_env_below_minimum_prints_warning(self):
+        captured = StringIO()
+        with patch.dict(os.environ, {"_BOT_TEST_INT": "-10"}):
+            with patch("sys.stderr", captured):
+                self.config._int_env("_BOT_TEST_INT", 30, minimum=5)
+        self.assertIn("WARNING", captured.getvalue())
+
+    def test_int_env_at_minimum_is_accepted(self):
+        with patch.dict(os.environ, {"_BOT_TEST_INT": "5"}):
+            self.assertEqual(self.config._int_env("_BOT_TEST_INT", 30, minimum=5), 5)
+
+    def test_int_env_no_minimum_accepts_any_value(self):
+        with patch.dict(os.environ, {"_BOT_TEST_INT": "0"}):
+            self.assertEqual(self.config._int_env("_BOT_TEST_INT", 5), 0)
+
     # --- _parse_channel_ids ---
 
     def test_parse_channel_ids_valid(self):
@@ -82,3 +104,38 @@ class TestNewConfig(unittest.TestCase):
 
         self.assertIsInstance(config.HISTORY_FILE, str)
         self.assertTrue(config.HISTORY_FILE.endswith(".json"))
+
+
+class TestGuildLockRequired(unittest.TestCase):
+    """H1: config must fail closed unless DISCORD_GUILD_ID or ALLOW_ANY_GUILD is set."""
+
+    def tearDown(self):
+        # Restore config to the harness-standard state for every other test module.
+        os.environ["DISCORD_GUILD_ID"] = "123456789"
+        os.environ.pop("ALLOW_ANY_GUILD", None)
+        from src import config
+
+        importlib.reload(config)
+
+    def test_missing_guild_id_and_no_opt_out_raises(self):
+        from src import config
+
+        with patch.dict(os.environ, {"DISCORD_GUILD_ID": "", "ALLOW_ANY_GUILD": ""}):
+            with self.assertRaises(ValueError):
+                importlib.reload(config)
+
+    def test_missing_guild_id_with_opt_out_loads(self):
+        from src import config
+
+        with patch.dict(os.environ, {"DISCORD_GUILD_ID": "", "ALLOW_ANY_GUILD": "true"}):
+            importlib.reload(config)
+            self.assertEqual(config.DISCORD_GUILD_ID, 0)
+            self.assertTrue(config.ALLOW_ANY_GUILD)
+
+    def test_guild_id_set_loads_without_opt_out(self):
+        from src import config
+
+        with patch.dict(os.environ, {"DISCORD_GUILD_ID": "555", "ALLOW_ANY_GUILD": ""}):
+            importlib.reload(config)
+            self.assertEqual(config.DISCORD_GUILD_ID, 555)
+            self.assertFalse(config.ALLOW_ANY_GUILD)

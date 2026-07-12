@@ -141,6 +141,31 @@ class TestDockerControl(unittest.TestCase):
         mock_container.exec_run.assert_called_once_with(["rcon-cli", "say", "Hello"])
 
     @patch("src.docker_control.docker.from_env")
+    def test_announce_in_game_template_with_extra_braces(self, mock_from_env):
+        """M7: a template with braces besides {message} (e.g. Minecraft's tellraw
+        JSON payload) must not crash -- str.format() would raise KeyError/ValueError
+        on the extra braces, so the {message} substitution must use a literal
+        replace instead."""
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.containers.get.return_value = mock_container
+
+        mock_exec = MagicMock()
+        mock_exec.exit_code = 0
+        mock_exec.output = b"ok"
+        mock_container.exec_run.return_value = mock_exec
+
+        with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
+            with patch(
+                "src.docker_control.CONTAINER_MESSAGE_CMD",
+                'rcon-cli tellraw @a {"text":"{message}"}',
+            ):
+                result = docker_control.announce_in_game("my_game_server", "Hello")
+        self.assertTrue(result.success)
+        mock_container.exec_run.assert_called_once_with(["/bin/sh", "-c", 'rcon-cli tellraw @a {"text":"Hello"}'])
+
+    @patch("src.docker_control.docker.from_env")
     def test_announce_in_game_exec_exception(self, mock_from_env):
         """exec_run raising an exception returns an error string."""
         mock_client = MagicMock()

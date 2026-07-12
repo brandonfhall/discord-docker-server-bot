@@ -182,7 +182,11 @@ def announce_in_game(name: str, message: str) -> Result:
 
     safe_msg = _sanitize(message)
     if "{message}" in CONTAINER_MESSAGE_CMD:
-        cmd = ["/bin/sh", "-c", CONTAINER_MESSAGE_CMD.format(message=safe_msg)]
+        # Use a literal substring replace, not str.format(): a template with any
+        # other brace (e.g. Minecraft's `tellraw @a {"text":"{message}"}`) would
+        # make .format() raise KeyError/ValueError. safe_msg can't contain braces
+        # (_VALID_MSG_CHARS strips them), so replace is exact and injects nothing.
+        cmd = ["/bin/sh", "-c", CONTAINER_MESSAGE_CMD.replace("{message}", safe_msg)]
     else:
         cmd = CONTAINER_MESSAGE_CMD.split() + [safe_msg]
 

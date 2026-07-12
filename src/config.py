@@ -5,16 +5,21 @@ from dotenv import load_dotenv
 load_dotenv()
 
 
-def _int_env(key: str, default: int) -> int:
-    """Parse an integer environment variable, falling back to *default* if missing or invalid."""
+def _int_env(key: str, default: int, minimum: int | None = None) -> int:
+    """Parse an integer environment variable, falling back to *default* if missing,
+    invalid, or below *minimum* (when given)."""
     val = (os.getenv(key) or "").strip()
     if not val:
         return default
     try:
-        return int(val)
+        parsed = int(val)
     except ValueError:
         print(f"WARNING: {key}={val!r} is not a valid integer, using default {default}", file=sys.stderr)
         return default
+    if minimum is not None and parsed < minimum:
+        print(f"WARNING: {key}={parsed} is below the minimum of {minimum}, using default {default}", file=sys.stderr)
+        return default
+    return parsed
 
 
 BOT_TOKEN = os.getenv("BOT_TOKEN")
@@ -31,17 +36,26 @@ DEFAULT_ALLOWED_ROLES = [r.strip() for r in os.getenv("DEFAULT_ALLOWED_ROLES", "
 
 CONTAINER_MESSAGE_CMD = os.getenv("CONTAINER_MESSAGE_CMD", 'echo "Message: {message}"')
 
-STATUS_PORT = _int_env("STATUS_PORT", 8000)
+STATUS_PORT = _int_env("STATUS_PORT", 8000, minimum=1)
 
-DOCKER_MAX_WORKERS = _int_env("DOCKER_MAX_WORKERS", 2)
+DOCKER_MAX_WORKERS = _int_env("DOCKER_MAX_WORKERS", 2, minimum=1)
 
-SHUTDOWN_DELAY = _int_env("SHUTDOWN_DELAY", 300)
+SHUTDOWN_DELAY = _int_env("SHUTDOWN_DELAY", 300, minimum=0)
 
 PERMISSIONS_FILE = os.getenv("PERMISSIONS_FILE", "data/permissions.json").strip()
 
 LOG_FILE = os.getenv("LOG_FILE", "data/bot.log").strip()
 
 DISCORD_GUILD_ID = _int_env("DISCORD_GUILD_ID", 0)
+
+ALLOW_ANY_GUILD = (os.getenv("ALLOW_ANY_GUILD") or "").strip().lower() in ("1", "true", "yes")
+if not DISCORD_GUILD_ID and not ALLOW_ANY_GUILD:
+    raise ValueError(
+        "DISCORD_GUILD_ID is not set. Anyone able to invite this bot to their own server would "
+        "gain full container control (Discord Administrator in their own guild bypasses all "
+        "role-based permission checks). Set DISCORD_GUILD_ID to lock the bot to your server, or "
+        "set ALLOW_ANY_GUILD=true to explicitly accept that risk."
+    )
 
 ANNOUNCE_CHANNEL_ID = _int_env("ANNOUNCE_CHANNEL_ID", 0)
 
@@ -63,9 +77,9 @@ def _parse_channel_ids(raw: str) -> list:
 
 ALLOWED_CHANNEL_IDS = _parse_channel_ids(os.getenv("ALLOWED_CHANNEL_IDS", ""))
 
-COMMAND_COOLDOWN = _int_env("COMMAND_COOLDOWN", 5)
+COMMAND_COOLDOWN = _int_env("COMMAND_COOLDOWN", 5, minimum=0)
 
-CRASH_CHECK_INTERVAL = _int_env("CRASH_CHECK_INTERVAL", 30)
+CRASH_CHECK_INTERVAL = _int_env("CRASH_CHECK_INTERVAL", 30, minimum=5)
 
 CRASH_ALERT_CHANNEL_ID = _int_env("CRASH_ALERT_CHANNEL_ID", 0)
 

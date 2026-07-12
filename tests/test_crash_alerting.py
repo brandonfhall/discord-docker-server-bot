@@ -32,6 +32,24 @@ class TestCrashAlerting(unittest.IsolatedAsyncioTestCase):
         self.assertIn("Crash Alert", mock_channel.send.call_args[0][0])
         self.assertEqual(state.last_known_status["server1"], "exited")
 
+    async def test_no_alert_after_bot_initiated_stop(self):
+        """M2: after a bot-initiated stop re-seeds last_known_status to 'exited',
+        the next poll must not treat that already-known state as a crash."""
+        bot_module = self.bot_module
+        state.last_known_status["server1"] = "exited"  # as set by the stop handler
+
+        mock_channel = MagicMock()
+        mock_channel.send = AsyncMock()
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch.object(bot_module, "CRASH_ALERT_CHANNEL_ID", 123):
+                with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="exited")):
+                    with patch.object(bot_module.bot, "get_channel", return_value=mock_channel):
+                        await bot_module.crash_check_loop.coro()
+
+        mock_channel.send.assert_not_called()
+        self.assertEqual(state.last_known_status["server1"], "exited")
+
     async def test_no_alert_when_still_running(self):
         bot_module = self.bot_module
         state.last_known_status["server1"] = "running"

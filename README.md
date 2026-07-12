@@ -24,7 +24,7 @@ A Discord bot that controls Docker containers (game servers, services, etc.) thr
 ## Quick Start
 
 ```bash
-cp .env.example .env   # fill in BOT_TOKEN and ALLOWED_CONTAINERS
+cp .env.example .env   # fill in BOT_TOKEN, ALLOWED_CONTAINERS, and DISCORD_GUILD_ID
 docker compose up -d --build
 ```
 
@@ -60,8 +60,9 @@ Enable **Developer Mode** in Discord (User Settings > Advanced) to copy IDs by r
 |---|---|---|---|
 | `BOT_TOKEN` | Yes | Discord bot token | — |
 | `ALLOWED_CONTAINERS` | Yes | Comma-separated container names to control | — |
+| `DISCORD_GUILD_ID` | Yes (or `ALLOW_ANY_GUILD`) | Discord server (guild) ID the bot is locked to | — |
+| `ALLOW_ANY_GUILD` | | Explicitly allow the bot to run without a guild lock — see [Security](#security) before setting this | `false` |
 | `DEFAULT_ALLOWED_ROLES` | | Roles allowed to use commands on first run | `ServerAdmin` |
-| `DISCORD_GUILD_ID` | | Lock bot to one Discord server | `0` (any) |
 | `ANNOUNCE_CHANNEL_ID` | | Channel for shutdown/restart announcements | `0` (command channel) |
 | `ANNOUNCE_ROLE_ID` | | Role to @mention during announcements | `0` (none) |
 | `ALLOWED_CHANNEL_IDS` | | Comma-separated channel IDs where commands work | (all) |
@@ -125,11 +126,13 @@ Discord Administrators bypass all permission checks.
 
 **`GET /healthz`** — Unauthenticated liveness check. Returns `{"ok": true}` whenever the process is running. Used by the Docker healthcheck; also safe to use for external uptime monitoring.
 
-**`GET /status`** — Returns container status, permissions, and recent logs as JSON.
+**`GET /status`** — Returns, as JSON: container status, the full role-permission map, and the last 50 log lines (which include Discord usernames, user IDs, channel names, and every command typed). Treat this endpoint as sensitive.
 
 Authentication (when `STATUS_TOKEN` is set):
-- Header: `X-Auth-Token: <token>`
+- Header: `X-Auth-Token: <token>` (preferred — doesn't land in proxy/access logs)
 - Query param: `/status?token=<token>`
+
+If `STATUS_TOKEN` is unset, `/status` has no authentication at all. The default compose setup binds the status port to the Docker host's loopback interface only (`127.0.0.1:8000:8000`); set `STATUS_TOKEN` before changing that to expose the port beyond localhost.
 
 **`GET /`** — Redirects to `/status`.
 
@@ -159,6 +162,7 @@ For internal architecture, module boundaries, and runtime model, see [ARCHITECTU
 ### Running Tests
 
 ```bash
+pip install -r requirements-dev.txt
 export PYTHONPATH=.
 pytest -v tests/
 ```
@@ -176,7 +180,9 @@ Mounts `src/` for live code updates (container restart required to pick up chang
 ## Security
 
 - The bot requires `/var/run/docker.sock` access, granting full Docker daemon control on the host. Run only on trusted hosts.
+- `DISCORD_GUILD_ID` locks the bot to a single Discord server and is required (set `ALLOW_ANY_GUILD=true` only if you understand the risk below). Without a guild lock, anyone able to invite the bot to a server they control would gain full container control there: role permissions are matched by **name**, and a Discord Administrator in that server always bypasses permission checks entirely.
 - Keep `BOT_TOKEN` and `STATUS_TOKEN` secret.
+- The `/status` endpoint (see [HTTP Status API](#http-status-api)) exposes recent log lines and the permission map, and has no authentication unless `STATUS_TOKEN` is set. The bundled `docker-compose.yml` binds it to the Docker host's loopback interface only — set `STATUS_TOKEN` before exposing it further.
 - Container names are validated against a strict allowlist regex before any Docker call.
 - All announcement messages are sanitized before being passed to `exec_run`. See the [In-Game Announcements](#in-game-announcements) section for a note on argument injection in command templates.
 - Sensitive tokens are redacted from all log output.

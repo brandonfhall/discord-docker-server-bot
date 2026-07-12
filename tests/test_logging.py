@@ -1,4 +1,5 @@
 import logging
+import sys
 import unittest
 
 
@@ -58,3 +59,19 @@ class TestRedactingFilter(unittest.TestCase):
         record = self._make_record("message stays unchanged")
         f.filter(record)
         self.assertEqual(record.msg, "message stays unchanged")
+
+    def test_redacts_token_in_exception_traceback(self):
+        """L2: a token appearing in an exception's str() (exc_info), not just the
+        log message itself, must also be redacted before any handler formats it."""
+        f = self._RedactingFilter(["supersecret"])
+        try:
+            raise RuntimeError("token supersecret leaked in traceback")
+        except RuntimeError:
+            record = self._make_record("something failed")
+            record.exc_info = sys.exc_info()
+
+        f.filter(record)
+
+        self.assertIsNone(record.exc_info)
+        self.assertNotIn("supersecret", record.exc_text)
+        self.assertIn("[REDACTED]", record.exc_text)
