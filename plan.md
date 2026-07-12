@@ -3,6 +3,7 @@
 **Branch:** `Fable-review` · **Reviewed at commit:** `a8c82b8` · **Date:** 2026-07-11
 **Reviewer:** Claude Fable 5 (senior review pass) · **Implementers:** hand each finding to an implementing agent (Sonnet/Opus)
 **Status: all 22 findings implemented and committed as of `8442cd1`.** See the handoff section immediately below for a final-review entry point.
+**Final review (Fable, 2026-07-11): 20/22 verified clean; two follow-ups required — see "Final review" section below (F1: M3/M4 residual in the `CommandNotFound` branch; F2: L7+L12 reopened M1's dedup window).**
 
 This document is a handoff. Each finding is self-contained: location, root cause, failure scenario,
 a prescribed fix (with code sketches), tests to add, and acceptance criteria. Implementers should not
@@ -88,6 +89,132 @@ docker run --rm -e BOT_TOKEN=t -e ALLOWED_CONTAINERS=c bot-test python -c "impor
   # expect ValueError (DISCORD_GUILD_ID/ALLOW_ANY_GUILD required) -- confirms H1's fail-closed behavior
 docker compose config --quiet                      # both compose files, if reviewing them too
 ```
+
+---
+
+## Final review — Fable, 2026-07-11 (post-implementation verification)
+
+**Verdict: 20 of 22 findings fully verified against the code at `685f455`. Two need a follow-up pass
+(F1, F2 below). Nothing needs to be reverted — both follow-ups are small, additive fixes.**
+
+Verification actually re-run on this box, not taken from the handoff's claims:
+- `pytest`: **188 passed**, ruff check + format both clean, `data/` stays empty across runs (L9 confirmed
+  empirically, including the `HISTORY_FILE` extension).
+- Docker image rebuilt: `requests 2.34.2` present, `httpx` absent (H2/L11 confirmed in the shipped image).
+- H1 fail-closed confirmed end-to-end: `docker run` without `DISCORD_GUILD_ID`/`ALLOW_ANY_GUILD` exits
+  with the intended `ValueError`. The `a772c21` commit message has a proper `BREAKING CHANGE:` footer and
+  a `fix(config)!` marker — communicates the break clearly. (Handoff review-focus item: satisfied.)
+- The handoff's other flagged deviations all hold up: **L7**'s restart exclusion is correct (Docker's
+  `restart` legitimately starts a stopped container — gating it would be a regression); **L5**'s
+  replacement test exercises the real `guide`/`history_cmd`/`perm_list` handlers under
+  `maintenance_mode=True`, which is the right contract to test; **M5**/**L1** match the recorded
+  maintainer decisions; **M6**'s tests assert the exact `allowed_mentions` object.
+- Handoff says "pushed to origin/Fable-review" — true for the 10 fix commits; the final docs commit
+  `685f455` is local-only (branch is ahead 1). Push before closing out.
+
+### F1 — M3/M4 residual: the `CommandNotFound` `!perm` branch bypasses every origin check — NEEDS FIX
+
+- **Location:** [src/bot.py:187-195](src/bot.py) (`on_command_error`, `CommandNotFound` branch)
+- **Problem:** M3/M4's resolution claims DM/foreign-guild safety "by construction" because `check_guild`
+  raises `SilentCheckFailure` first. That's true for **registered** commands only. `CommandNotFound` is
+  raised by `process_commands` *before* any global check runs (discord.py only invokes `bot.check`
+  predicates inside `Command.prepare`, and there is no command to prepare). So a **typo'd** perm command
+  (`!perms`, `!permadd`, …) reaches this branch from any origin:
+  1. **Via DM:** `ctx.author` is a `discord.User` with no `guild_permissions` → `AttributeError` inside
+     the error handler → traceback log spam. This is the *exact* latent bug Fable's M3 finding flagged at
+     old line 170 ("if a `!perm` typo arrives via DM") — the fix covered the registered-command path but
+     not this one.
+  2. **From a foreign guild** (with `DISCORD_GUILD_ID` set): the inviter is an Administrator in their own
+     guild, so the bot **replies with the usage line in the foreign guild** — the presence leak M4 exists
+     to prevent.
+  3. **From a disallowed channel** in the home guild: same usage reply, bypassing the channel lock.
+- **Fix (prescribed):** Guard the branch with the same origin conditions `check_guild` enforces, before
+  touching `ctx.author`:
+  ```python
+  elif isinstance(error, commands.CommandNotFound):
+      content = ctx.message.content or ""
+      if content.startswith(f"{bot.command_prefix}perm"):
+          if (
+              ctx.guild is not None
+              and (not DISCORD_GUILD_ID or ctx.guild.id == DISCORD_GUILD_ID)
+              and (not ALLOWED_CHANNEL_IDS or ctx.channel.id in ALLOWED_CHANNEL_IDS)
+              and ctx.author.guild_permissions.administrator
+          ):
+              await ctx.send("Usage: `!perm <add|remove|list> ...`")
+  ```
+  (Alternatively extract a small `_origin_allowed(ctx) -> bool` helper shared by `check_guild` and this
+  branch so the two can't drift; implementer's choice.)
+- **Tests** (`tests/test_bot_commands.py`, next to the existing
+  `test_on_command_error_command_not_found_*` trio): (a) DM: `ctx.guild = None`, author mock **without**
+  `guild_permissions` (use `spec=` or `del ctx.author.guild_permissions` — a bare `MagicMock` would
+  auto-create the attribute and mask the bug) → no send, no raise; (b) foreign guild: `ctx.guild.id != 
+  DISCORD_GUILD_ID` (patch it set), admin author → no send; (c) existing home-guild-admin test stays green.
+- **Acceptance:** all three pass; the three existing CommandNotFound tests unchanged.
+
+### F2 — L7+L12 reopened the pending-op dedup window M1's design closed; ARCHITECTURE.md now documents an invariant the code no longer holds — NEEDS FIX
+
+- **Location:** [src/bot.py:326-336](src/bot.py) (countdown path of `_delayed_container_op`),
+  [ARCHITECTURE.md:87](ARCHITECTURE.md)
+- **Problem:** ARCHITECTURE.md still says *"A `Future` placeholder is inserted **before** any `await` in
+  `_delayed_container_op` so two rapid `!stop` commands can't both pass the `has_pending_op` check."*
+  After this batch that's false: two awaits now sit between the `has_pending_op` check (line 326) and the
+  placeholder insert (lines 334-336) — L7's `_bail_if_not_running()` (awaits `container_status`) and
+  L12's `await run_blocking(history.record, …)`. Two rapid `!stop`s can interleave at either await and
+  both pass the dedup check. **Consequences (traced, not speculative):** both run the full announcement
+  sequence (duplicate Discord + in-game countdown announcements, duplicate history records); the second
+  insert overwrites the first placeholder, so the first invocation's post-announcement identity check
+  fails and it tells its user *"The scheduled stop for `X` was cancelled before the countdown completed"*
+  — which nobody did. M1's identity check does prevent double *execution* (only one countdown task is
+  ever scheduled), which is why this is a correctness/UX bug and not a duplicate-stop bug — but the
+  documented invariant is gone, and each finding was individually correct while their composition
+  regressed it. Neither the L7 nor L12 resolution notes caught the interaction.
+- **Fix (prescribed):** Restore the invariant by inserting the placeholder + `pending_op_info` immediately
+  after the `has_pending_op` check, and move the status pre-check and `history.record` await inside the
+  cleanup scope:
+  ```python
+  if state.has_pending_op(target):
+      await ctx.send(...duplicate message...)
+      return
+
+  placeholder = bot.loop.create_future()
+  state.pending_ops[target] = placeholder
+  state.pending_op_info[target] = {"action": action, "scheduled_at": datetime.now(timezone.utc)}
+
+  try:
+      if await _bail_if_not_running():
+          if state.pending_ops.get(target) is placeholder:
+              state.cancel_pending(target)
+          return
+      await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, action, target)
+      ...existing announcement awaits...
+  except Exception:
+      if state.pending_ops.get(target) is placeholder:
+          state.cancel_pending(target)
+      raise
+  ```
+  The `now` path needs no change (it doesn't use `pending_ops` for dedup). The existing
+  `test_stop_on_already_stopped_container_skips_countdown` asserts `pending_ops` is empty after the bail,
+  so the identity-checked cleanup on the bail path is load-bearing — keep it.
+- **Tests:** add to `TestPendingOps`: make the mocked `run_blocking` capture
+  `state.has_pending_op("test_container")` at the moment `func.__name__ == "container_status"` is called
+  (countdown path) and assert it was already `True` — that pins the closed window and fails on the current
+  code. Existing M1/L7 tests should pass unchanged.
+- **Acceptance:** new test passes; ARCHITECTURE.md:87 is accurate again (re-read it after the code change
+  — if the ordering ends up "dedup check → placeholder → status pre-check → announce", the "checks the
+  container's current status before announcing anything" bullet at line 90 stays true as written).
+
+### Minor notes (no code action required)
+
+- The verification block in the handoff above has a typo: `docker build . --file Dockerfile --tag
+  bot-test .` passes the build context twice (trailing `.`). The correct form (used for this review) is
+  `docker build . --file Dockerfile --tag bot-test:latest`.
+- `logs_cmd` ([src/bot.py:545](src/bot.py)) replies to unrecognized args *before* the maintenance-mode
+  check, so a typo'd `!logs` during maintenance gets a usage reply rather than the maintenance message.
+  Harmless — arguably the more helpful order — noting it only so the inconsistency is a decision, not an
+  accident.
+- L9's open question ("no other env-var-backed file path has the same issue") is now verified
+  empirically: the full suite leaves `data/` untouched, so `PERMISSIONS_FILE` is genuinely unaffected
+  as claimed.
 
 ---
 
@@ -328,6 +455,10 @@ docker compose config --quiet                      # both compose files, if revi
   response and no traceback.
 - **Resolution:** Implemented together with M4 (see below) — `check_guild` now raises `SilentCheckFailure`
   for `ctx.guild is None` before any other check, so DMs never reach `has_permission`/`ctx.author.roles`.
+- **⚠️ Final review:** Incomplete — the `CommandNotFound` `!perm` branch in `on_command_error` never
+  passes through `check_guild` (unknown commands skip global checks), so the DM `AttributeError` this
+  finding called out at old line 170 is still reachable via a typo'd `!perm` command. See **F1** in the
+  final-review section at the top.
 
 ### M4 — Guild-lock rejections reply "You do not have permission…" in foreign guilds, leaking the bot's presence ✅ FIXED
 
@@ -374,6 +505,9 @@ docker compose config --quiet                      # both compose files, if revi
   test, and updated `test_on_command_error_silent_in_disallowed_channel` to construct a `SilentCheckFailure`
   rather than a plain `CheckFailure` (mechanism changed from config-inference to exception type). Also updated
   the "Guild lock" bullet in ARCHITECTURE.md. 164 tests pass, ruff clean.
+- **⚠️ Final review:** One residual origin leak remains via the `CommandNotFound` `!perm` branch, which
+  bypasses `check_guild` entirely (foreign-guild admins get a usage reply). See **F1** in the
+  final-review section at the top.
 
 ### M5 — `/status` API: open by default, published on all interfaces, and it exposes logs + the permission map ✅ FIXED (docs-only, per maintainer decision)
 
@@ -586,6 +720,10 @@ Test in `TestPendingOps`.
   `test_stop_without_now_still_uses_countdown` never received M1's `create_future`-must-be-a-real-Future
   fix (it's in a different test class than the ones M1 touched) and was only passing because it didn't
   assert past the first message; now fixed and given a real assertion. 188 tests pass, ruff clean.
+- **⚠️ Final review:** The fix itself is correct, but the new pre-check `await` (together with L12's
+  awaited `history.record`) landed *between* the `has_pending_op` dedup check and M1's placeholder
+  insert, reopening the rapid-double-`!stop` window and making ARCHITECTURE.md's "placeholder before any
+  await" bullet inaccurate. See **F2** in the final-review section at the top.
 
 ### L8 — Compose healthchecks hardcode port 8000 ✅ FIXED
 [docker-compose.yml:35-40](docker-compose.yml), [docker-compose.dev.yml:33-38](docker-compose.dev.yml).
@@ -650,6 +788,9 @@ this.
   depended on the exact `run_blocking` call count/sequence (`test_stop_now_sends_announcements`'s
   `func_names` list gained a leading `"record"` entry; `test_logs_command_with_line_count` now checks the
   specific `container_logs` call via `assert_any_call` instead of asserting a single total call).
+- **⚠️ Final review:** In the countdown path, the awaited `history.record` is one of the two new awaits
+  that reopened the pending-op dedup window (with L7's pre-check). See **F2** in the final-review section
+  at the top.
 
 ### L13 — Cosmetic polish (fold into any nearby PR) ✅ FIXED
 - `_format_delay(90)` → "1 minute" (drops 30 s) — [src/bot.py:230-235](src/bot.py); include remainder
