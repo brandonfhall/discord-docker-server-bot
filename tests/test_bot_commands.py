@@ -867,6 +867,12 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
         ctx.channel.id = 100
         ctx.channel.send = AsyncMock()
 
+        mock_loop = MagicMock()
+        # F2: the placeholder is now inserted before the status pre-check, so this
+        # path calls bot.loop.create_future() and then immediately cleans it back
+        # up via state.cancel_pending() -- must be a real Future for that to work.
+        mock_loop.create_future.side_effect = asyncio.get_running_loop().create_future
+
         async def mock_run_blocking(func, *args, **kwargs):
             if func.__name__ == "container_status":
                 return "exited"
@@ -874,12 +880,14 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
 
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
             with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
-                await bot_module.stop.callback(ctx, "test_container")
+                with patch.object(bot_module.bot, "loop", mock_loop):
+                    await bot_module.stop.callback(ctx, "test_container")
 
         ctx.send.assert_called_once()
         self.assertIn("not running", ctx.send.call_args[0][0].lower())
         ctx.channel.send.assert_not_called()
         self.assertNotIn("test_container", state.pending_ops)
+        self.assertNotIn("test_container", state.pending_op_info)
 
     async def test_second_stop_rejected_after_first_registers_task(self):
         """After the first !stop schedules a task, a second !stop is rejected."""
@@ -1034,6 +1042,49 @@ class TestPendingOps(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(snapshot["info"].get("action"), "stop")
         self.assertIn("scheduled_at", snapshot["info"])
+
+    async def test_placeholder_registered_before_status_precheck(self):
+        """F2: the pending-op placeholder must be inserted right after the
+        has_pending_op dedup check, before the L7 status pre-check and L12
+        history.record awaits -- otherwise two rapid !stop calls could both pass
+        the dedup check while interleaved at either await. Pins the invariant by
+        asserting has_pending_op is already True by the time the status
+        pre-check's run_blocking call fires; fails on the pre-F2 ordering where
+        the placeholder wasn't inserted until after both awaits completed."""
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        mock_loop = MagicMock()
+
+        def _create_task(coro):
+            coro.close()  # prevent "coroutine never awaited" warning
+            return mock_task
+
+        mock_loop.create_task.side_effect = _create_task
+        mock_loop.create_future.side_effect = asyncio.get_running_loop().create_future
+
+        observed = {}
+
+        async def mock_run_blocking(func, *args, **kwargs):
+            if func.__name__ == "container_status":
+                observed["pending_at_precheck"] = state.has_pending_op("test_container")
+                return "running"
+            return docker_control.Result(True, "ok")
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["test_container"]):
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    with patch("src.bot.docker_control.run_blocking", side_effect=mock_run_blocking):
+                        with patch.object(bot_module.bot, "loop", mock_loop):
+                            await bot_module.stop.callback(ctx, "test_container")
+
+        self.assertTrue(observed["pending_at_precheck"])
 
 
 class TestStopNow(unittest.IsolatedAsyncioTestCase):

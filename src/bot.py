@@ -336,15 +336,23 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
         await ctx.send(f"A shutdown or restart is already scheduled for `{target}`. Ignoring duplicate request.")
         return
 
-    if await _bail_if_not_running():
-        return
-
-    await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, action, target)
+    # Insert the placeholder immediately after the dedup check above, before any
+    # further await -- _bail_if_not_running and history.record below both await,
+    # and two rapid !stop calls could otherwise both pass has_pending_op while
+    # interleaved at either one (F2: this is exactly what happened when those two
+    # awaits were inserted between the dedup check and the placeholder).
     placeholder = bot.loop.create_future()
     state.pending_ops[target] = placeholder
     state.pending_op_info[target] = {"action": action, "scheduled_at": datetime.now(timezone.utc)}
 
     try:
+        if await _bail_if_not_running():
+            if state.pending_ops.get(target) is placeholder:
+                state.cancel_pending(target)
+            return
+
+        await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, action, target)
+
         delay_str = _format_delay(SHUTDOWN_DELAY)
         countdown_msg = countdown_msg_tpl.format(delay=delay_str)
         await ctx.send(f"Server {target} will {action} in {delay_str} (countdown started).")

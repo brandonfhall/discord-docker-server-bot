@@ -3,7 +3,7 @@
 **Branch:** `Fable-review` · **Reviewed at commit:** `a8c82b8` · **Date:** 2026-07-11
 **Reviewer:** Claude Fable 5 (senior review pass) · **Implementers:** hand each finding to an implementing agent (Sonnet/Opus)
 **Status: all 22 findings implemented and committed as of `8442cd1`.** See the handoff section immediately below for a final-review entry point.
-**Final review (Fable, 2026-07-11): 20/22 verified clean; two follow-ups required — see "Final review" section below (F1: M3/M4 residual in the `CommandNotFound` branch — ✅ fixed; F2: L7+L12 reopened M1's dedup window — in progress).**
+**Final review (Fable, 2026-07-11): 20/22 verified clean; two follow-ups required — see "Final review" section below (F1: M3/M4 residual in the `CommandNotFound` branch — ✅ fixed; F2: L7+L12 reopened M1's dedup window — ✅ fixed).**
 
 This document is a handoff. Each finding is self-contained: location, root cause, failure scenario,
 a prescribed fix (with code sketches), tests to add, and acceptance criteria. Implementers should not
@@ -95,7 +95,7 @@ docker compose config --quiet                      # both compose files, if revi
 ## Final review — Fable, 2026-07-11 (post-implementation verification)
 
 **Verdict: 20 of 22 findings fully verified against the code at `685f455`. Two needed a follow-up pass
-(F1, F2 below) — both additive, no reverts. F1 is fixed; F2 is in progress.**
+(F1, F2 below) — both additive, no reverts. F1 and F2 are both now fixed; see their `Resolution` notes.**
 
 Verification actually re-run on this box, not taken from the handoff's claims:
 - `pytest`: **188 passed**, ruff check + format both clean, `data/` stays empty across runs (L9 confirmed
@@ -166,7 +166,7 @@ Verification actually re-run on this box, not taken from the handoff's claims:
   ARCHITECTURE.md to describe `_origin_allowed()` and explain why `CommandNotFound` needs its own call to
   it. 190 tests pass, ruff clean.
 
-### F2 — L7+L12 reopened the pending-op dedup window M1's design closed; ARCHITECTURE.md now documents an invariant the code no longer holds — NEEDS FIX
+### F2 — L7+L12 reopened the pending-op dedup window M1's design closed; ARCHITECTURE.md now documents an invariant the code no longer holds ✅ FIXED
 
 - **Location:** [src/bot.py:326-336](src/bot.py) (countdown path of `_delayed_container_op`),
   [ARCHITECTURE.md:87](ARCHITECTURE.md)
@@ -217,6 +217,24 @@ Verification actually re-run on this box, not taken from the handoff's claims:
 - **Acceptance:** new test passes; ARCHITECTURE.md:87 is accurate again (re-read it after the code change
   — if the ordering ends up "dedup check → placeholder → status pre-check → announce", the "checks the
   container's current status before announcing anything" bullet at line 90 stays true as written).
+- **Resolution:** Implemented as prescribed in [src/bot.py](src/bot.py) `_delayed_container_op`: the
+  placeholder `Future` and `pending_op_info` are now inserted immediately after the `has_pending_op` dedup
+  check, before `_bail_if_not_running()` or `history.record` run. Both of those, plus the existing
+  countdown-announcement awaits, now live inside the same `try` block; the bail branch (not-running) does
+  its own identity-checked cleanup (`if pending_ops.get(target) is placeholder: cancel_pending(target)`)
+  before returning, and the shared `except Exception` clause (unchanged from M1) still covers the
+  announcement-failure case. The `now` path was untouched, per the finding's own note (it doesn't use
+  `pending_ops` for dedup). Added `test_placeholder_registered_before_status_precheck` to `TestPendingOps`,
+  which captures `state.has_pending_op("test_container")` at the moment the mocked `container_status` call
+  fires and asserts it was already `True` — verified this test fails on the pre-fix code
+  (`git stash` the `src/bot.py` change and re-run: `AssertionError: False is not true`) before confirming
+  it passes with the fix, so it actually pins the regression rather than passing vacuously.
+  `test_stop_on_already_stopped_container_skips_countdown` needed a mocked `bot.loop.create_future` added
+  (it now reaches the real placeholder-creation code on the not-running path, which it didn't before this
+  fix) — also added an assertion that `pending_op_info` is cleaned up alongside `pending_ops` on that path,
+  which wasn't previously checked. Updated the "Pending op deduplication" section in ARCHITECTURE.md
+  (bullets 87 and 90) to describe the corrected ordering and reference F2 directly, so a future reader
+  doesn't need to reconstruct the history to trust the invariant. 191 tests pass, ruff clean.
 
 ### Minor notes (no code action required)
 
