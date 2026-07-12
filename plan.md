@@ -97,6 +97,20 @@ docker compose config --quiet                      # both compose files, if revi
 **Verdict: 20 of 22 findings fully verified against the code at `685f455`. Two needed a follow-up pass
 (F1, F2 below) — both additive, no reverts. F1 and F2 are both now fixed; see their `Resolution` notes.**
 
+**✅ Sign-off (Fable, 2026-07-11, at `1ad38b2`): F1 and F2 verified fixed — all 22 findings plus both
+follow-ups are now closed. Verified independently, not from the resolution notes: read both diffs in
+full; re-ran the suite (191 passed) and ruff (clean); confirmed all three new regression tests fail
+against the pre-fix `src/bot.py` with exactly the expected failure modes (DM → `AttributeError:
+guild_permissions`, foreign guild → unexpected `send`, F2 → placeholder absent at the pre-check) and
+pass with the fixes; confirmed ARCHITECTURE.md's guild-lock and pending-op-dedup sections now match the
+code. Also checked that `CommandNotFound` was the only `on_command_error` branch reachable without
+passing `check_guild` — `UserInputError`, `MissingRequiredArgument`, and `CommandOnCooldown` are all
+raised in `Command.prepare`/argument parsing, which runs after global checks pass, so no other branch
+has F1's problem. The `_origin_allowed()` extraction is the right call: single source of truth for
+origin policy, and the F2 ordering comment in `_delayed_container_op` should keep the invariant from
+being silently broken a second time. No further findings. Remaining housekeeping only: push the branch
+(3 commits ahead of `origin/Fable-review` at sign-off time).**
+
 Verification actually re-run on this box, not taken from the handoff's claims:
 - `pytest`: **188 passed**, ruff check + format both clean, `data/` stays empty across runs (L9 confirmed
   empirically, including the `HISTORY_FILE` extension).
