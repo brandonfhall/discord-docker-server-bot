@@ -23,6 +23,8 @@ from .config import (
     CRASH_CHECK_INTERVAL,
     CRASH_ALERT_CHANNEL_ID,
     HISTORY_FILE,
+    HEALTHCHECK_POLL_INTERVAL,
+    HEALTHCHECK_MAX_WAIT,
 )
 from .logging_config import setup_logging
 from .state import state
@@ -262,11 +264,54 @@ async def start(ctx, container_name: str = None):
     await ctx.send(f"Starting {target}...")
     res = await docker_control.run_blocking(docker_control.start_container, target)
     logging.info(f"START result for {ctx.author}: {res.message}")
-    if res.success:
-        # Re-seed the crash-alerting baseline so the next poll doesn't see a
-        # stale "not running" status and fire a false crash alert.
-        state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
-    await ctx.send(res.message)
+    if not res.success:
+        await ctx.send(res.message)
+        return
+
+    # Re-seed the crash-alerting baseline so the next poll doesn't see a
+    # stale "not running" status and fire a false crash alert.
+    state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
+
+    health = await docker_control.run_blocking(docker_control.container_health, target)
+    if health is None:
+        # No HEALTHCHECK defined for this container -- Docker's running state
+        # is the only readiness signal available, so report success now, same
+        # as before this container ever had a health-aware path.
+        await ctx.send(res.message)
+        return
+
+    await ctx.send(f"`{target}` container started -- waiting for its healthcheck before reporting ready...")
+    bot.loop.create_task(_wait_for_healthy(ctx, target))
+
+
+async def _wait_for_healthy(ctx, target: str):
+    """Poll container_health() after a !start until it leaves 'starting', then
+    report the outcome. Only scheduled for containers with a Docker HEALTHCHECK
+    configured -- start() reports readiness immediately for those without one.
+
+    Runs as a background task (not awaited by start()) so the command handler
+    returns promptly, matching the pattern _delayed_container_op uses for
+    stop/restart countdowns rather than blocking the command dispatch for
+    however long the healthcheck takes to settle.
+    """
+    elapsed = 0
+    try:
+        while HEALTHCHECK_MAX_WAIT == 0 or elapsed < HEALTHCHECK_MAX_WAIT:
+            await asyncio.sleep(HEALTHCHECK_POLL_INTERVAL)
+            elapsed += HEALTHCHECK_POLL_INTERVAL
+            health = await docker_control.run_blocking(docker_control.container_health, target)
+            if health == "healthy":
+                await ctx.send(f"`{target}` is now **healthy** and ready. ✅")
+                return
+            if health == "unhealthy":
+                await ctx.send(f"`{target}` started but its healthcheck reports **unhealthy**. Check `!logs {target}`.")
+                return
+        await ctx.send(
+            f"`{target}` is still `starting` after {HEALTHCHECK_MAX_WAIT}s -- giving up watching. "
+            f"Check `!status {target}` for the current state."
+        )
+    except Exception as e:
+        logging.error(f"Error while waiting for '{target}' to become healthy: {e}", exc_info=True)
 
 
 def _format_delay(seconds: int) -> str:

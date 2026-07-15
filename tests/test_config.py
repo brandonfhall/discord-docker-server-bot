@@ -105,6 +105,18 @@ class TestNewConfig(unittest.TestCase):
         self.assertIsInstance(config.HISTORY_FILE, str)
         self.assertTrue(config.HISTORY_FILE.endswith(".json"))
 
+    def test_healthcheck_poll_interval_has_default(self):
+        from src import config
+
+        self.assertIsInstance(config.HEALTHCHECK_POLL_INTERVAL, int)
+        self.assertGreater(config.HEALTHCHECK_POLL_INTERVAL, 0)
+
+    def test_healthcheck_max_wait_has_default(self):
+        from src import config
+
+        self.assertIsInstance(config.HEALTHCHECK_MAX_WAIT, int)
+        self.assertGreaterEqual(config.HEALTHCHECK_MAX_WAIT, 0)
+
 
 class TestGuildLockRequired(unittest.TestCase):
     """H1: config must fail closed unless DISCORD_GUILD_ID or ALLOW_ANY_GUILD is set."""

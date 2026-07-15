@@ -78,6 +78,8 @@ Enable **Developer Mode** in Discord (User Settings > Advanced) to copy IDs by r
 | `CRASH_CHECK_INTERVAL` | | Seconds between container status polls for crash alerting | `30` |
 | `CRASH_ALERT_CHANNEL_ID` | | Channel for crash alerts (falls back to `ANNOUNCE_CHANNEL_ID`) | `0` |
 | `HISTORY_FILE` | | Path to command history JSON file | `data/history.json` |
+| `HEALTHCHECK_POLL_INTERVAL` | | Seconds between health polls after `!start`, for containers with a Docker `HEALTHCHECK` | `5` |
+| `HEALTHCHECK_MAX_WAIT` | | Seconds `!start` watches a healthcheck before giving up (`0` = no limit) | `1800` |
 
 See [.env.example](.env.example) for a copy-paste template.
 
@@ -89,7 +91,7 @@ All commands use the `!` prefix. Container name is optional when only one contai
 
 | Command | Permission | Description |
 |---|---|---|
-| `!start [container]` | `start` | Start the container |
+| `!start [container]` | `start` | Start the container. If it defines a Docker `HEALTHCHECK`, the bot reports "started" only once the healthcheck reports healthy (see `HEALTHCHECK_POLL_INTERVAL`/`HEALTHCHECK_MAX_WAIT`); otherwise it reports success as soon as the container process launches |
 | `!stop [container]` | `stop` | Announce shutdown, wait for delay, then stop |
 | `!stop [container] now` | `stop` + `stop_now` | Immediately stop (skips countdown, cancels pending) |
 | `!restart [container]` | `restart` | Announce restart, wait for delay, then restart |

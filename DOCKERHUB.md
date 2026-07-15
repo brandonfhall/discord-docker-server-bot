@@ -56,7 +56,7 @@ See the [full variable list](https://github.com/brandonfhall/discord-docker-serv
 
 | Command | Description |
 |---|---|
-| `!start [container]` | Start the container |
+| `!start [container]` | Start the container (waits for a healthy Docker healthcheck before reporting "started", if the container defines one) |
 | `!stop [container]` | Announce shutdown, wait for delay, then stop |
 | `!stop [container] now` | Immediately stop (requires `stop_now` permission) |
 | `!restart [container]` | Announce restart, wait for delay, then restart |
