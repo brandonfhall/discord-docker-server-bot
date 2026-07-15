@@ -456,7 +456,11 @@ async def status_cmd(ctx, container_name: str = None):
         return
     logging.info(f"User {ctx.author} requested STATUS for container '{target}'")
     res = await docker_control.run_blocking(docker_control.container_status, target)
+    health = await docker_control.run_blocking(docker_control.container_health, target)
     lines = [f"Status for `{target}`: **{res}**"]
+    if health:
+        emoji = {"healthy": "✅", "unhealthy": "❌", "starting": "⏳"}.get(health, "")
+        lines.append(f"Health: **{health}** {emoji}".rstrip())
     if state.has_pending_op(target):
         info = state.pending_op_info.get(target, {})
         op_action = info.get("action", "operation")

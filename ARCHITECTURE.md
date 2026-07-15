@@ -79,6 +79,7 @@ A single lazily-constructed `_docker_client` is reused for the lifetime of the p
 
 - Every public function in [src/docker_control.py](src/docker_control.py) calls `_check_allowed(name)` first — it returns a typed `Result` rather than raising on expected failure modes.
 - `announce_in_game` has two execution paths based on whether `CONTAINER_MESSAGE_CMD` contains `{message}`: the placeholder path uses `/bin/sh -c` (for templates like `screen -S foo -X stuff "say {message}\015"`), the no-placeholder path uses argv form (safer, preferred when possible). The placeholder substitution uses a literal `.replace("{message}", safe_msg)`, not `str.format()` — a template with other braces (e.g. Minecraft's `tellraw @a {"text":"{message}"}`) would make `.format()` raise.
+- `container_status` (Docker's `running`/`exited`/etc. state) and `container_health` (Docker's `HEALTHCHECK` result: `starting`/`healthy`/`unhealthy`) are deliberately separate functions rather than one combined call. Most allow-listed containers don't define a `HEALTHCHECK` at all — `container_health` returns `None` in that case (also for disallowed/not-found containers), and every caller (`!status`, `/status`) must treat `None` as "no health data to show," not as an error. Docker exposes health at `container.attrs["State"]["Health"]["Status"]`, a different field from `container.status`, so it can't be folded into `container_status`'s single string return without overloading its meaning.
 
 ### Pending op deduplication
 

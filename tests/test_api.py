@@ -35,15 +35,28 @@ class TestStatusEndpoint(unittest.TestCase):
         with patch.object(api_module, "STATUS_TOKEN", None):
             with patch.object(api_module, "ALLOWED_CONTAINERS", ["test_container"]):
                 with patch("src.api.docker_control.container_status", return_value="running"):
-                    with patch("src.api.permissions.list_permissions", return_value={"start": ["admin"]}):
-                        response = client.get("/status")
+                    with patch("src.api.docker_control.container_health", return_value="healthy"):
+                        with patch("src.api.permissions.list_permissions", return_value={"start": ["admin"]}):
+                            response = client.get("/status")
         self.assertEqual(response.status_code, 200)
         data = response.json()
         self.assertTrue(data["ok"])
         self.assertIn("containers", data)
         self.assertIn("permissions", data)
         self.assertIn("logs", data)
-        self.assertEqual(data["containers"]["test_container"], "running")
+        self.assertEqual(data["containers"]["test_container"], {"status": "running", "health": "healthy"})
+
+    def test_status_health_is_null_when_not_configured(self):
+        """Containers without a Docker healthcheck report health=None -- must
+        serialize to JSON null, not be omitted or raise."""
+        with patch.object(api_module, "STATUS_TOKEN", None):
+            with patch.object(api_module, "ALLOWED_CONTAINERS", ["test_container"]):
+                with patch("src.api.docker_control.container_status", return_value="running"):
+                    with patch("src.api.docker_control.container_health", return_value=None):
+                        with patch("src.api.permissions.list_permissions", return_value={}):
+                            response = client.get("/status")
+        data = response.json()
+        self.assertIsNone(data["containers"]["test_container"]["health"])
 
     def test_status_requires_token_when_configured(self):
         with patch.object(api_module, "STATUS_TOKEN", "secret"):
@@ -54,14 +67,16 @@ class TestStatusEndpoint(unittest.TestCase):
         with patch.object(api_module, "STATUS_TOKEN", "secret"):
             with patch.object(api_module, "ALLOWED_CONTAINERS", ["test_container"]):
                 with patch("src.api.docker_control.container_status", return_value="running"):
-                    with patch("src.api.permissions.list_permissions", return_value={}):
-                        response = client.get("/status", headers={"X-Auth-Token": "secret"})
+                    with patch("src.api.docker_control.container_health", return_value=None):
+                        with patch("src.api.permissions.list_permissions", return_value={}):
+                            response = client.get("/status", headers={"X-Auth-Token": "secret"})
         self.assertEqual(response.status_code, 200)
 
     def test_status_accepts_token_via_query_param(self):
         with patch.object(api_module, "STATUS_TOKEN", "secret"):
             with patch.object(api_module, "ALLOWED_CONTAINERS", ["test_container"]):
                 with patch("src.api.docker_control.container_status", return_value="running"):
-                    with patch("src.api.permissions.list_permissions", return_value={}):
-                        response = client.get("/status?token=secret")
+                    with patch("src.api.docker_control.container_health", return_value=None):
+                        with patch("src.api.permissions.list_permissions", return_value={}):
+                            response = client.get("/status?token=secret")
         self.assertEqual(response.status_code, 200)

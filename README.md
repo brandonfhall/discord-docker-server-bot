@@ -96,7 +96,7 @@ All commands use the `!` prefix. Container name is optional when only one contai
 | `!restart [container] now` | `restart` + `restart_now` | Immediately restart (skips countdown, cancels pending) |
 | `!cancel` | `cancel` | Cancel all pending stop/restart countdowns across every container |
 | `!announce [container] <message>` | `announce` | Send a message to the server console |
-| `!status [container]` | — | Show container status and any pending stop/restart countdown |
+| `!status [container]` | — | Show container status, Docker healthcheck status (if configured), and any pending stop/restart countdown |
 | `!guide` | — | Show a quick command reference |
 
 ### Info
@@ -126,7 +126,9 @@ Discord Administrators bypass all permission checks.
 
 **`GET /healthz`** — Unauthenticated liveness check. Returns `{"ok": true}` whenever the process is running. Used by the Docker healthcheck; also safe to use for external uptime monitoring.
 
-**`GET /status`** — Returns, as JSON: container status, the full role-permission map, and the last 50 log lines (which include Discord usernames, user IDs, channel names, and every command typed). Treat this endpoint as sensitive.
+**`GET /status`** — Returns, as JSON: per-container status and Docker healthcheck state, the full role-permission map, and the last 50 log lines (which include Discord usernames, user IDs, channel names, and every command typed). Treat this endpoint as sensitive.
+
+Each entry under `containers` is `{"status": "<docker status>", "health": "<healthy|unhealthy|starting|null>"}`. `health` is `null` for containers that don't define a `HEALTHCHECK` — most containers won't, and that's expected, not an error.
 
 Authentication (when `STATUS_TOKEN` is set):
 - Header: `X-Auth-Token: <token>` (preferred — doesn't land in proxy/access logs)
