@@ -280,14 +280,19 @@ async def start(ctx, container_name: str = None):
         await ctx.send(res.message)
         return
 
-    await ctx.send(f"`{target}` container started -- waiting for its healthcheck before reporting ready...")
-    bot.loop.create_task(_wait_for_healthy(ctx, target))
+    # A HEALTHCHECK is configured: don't claim "started" until it reports
+    # healthy. No message here -- the background task below sends the single
+    # follow-up reply once it knows the real outcome, so the user still sees
+    # exactly two messages for !start: "Starting..." and the final result,
+    # same as the no-healthcheck path above.
+    bot.loop.create_task(_wait_for_healthy(ctx, target, res.message))
 
 
-async def _wait_for_healthy(ctx, target: str):
+async def _wait_for_healthy(ctx, target: str, success_message: str):
     """Poll container_health() after a !start until it leaves 'starting', then
-    report the outcome. Only scheduled for containers with a Docker HEALTHCHECK
-    configured -- start() reports readiness immediately for those without one.
+    send the single follow-up message reporting the outcome. Only scheduled
+    for containers with a Docker HEALTHCHECK configured -- start() reports
+    readiness immediately (and alone) for those without one.
 
     Runs as a background task (not awaited by start()) so the command handler
     returns promptly, matching the pattern _delayed_container_op uses for
@@ -301,7 +306,7 @@ async def _wait_for_healthy(ctx, target: str):
             elapsed += HEALTHCHECK_POLL_INTERVAL
             health = await docker_control.run_blocking(docker_control.container_health, target)
             if health == "healthy":
-                await ctx.send(f"`{target}` is now **healthy** and ready. ✅")
+                await ctx.send(success_message)
                 return
             if health == "unhealthy":
                 await ctx.send(f"`{target}` started but its healthcheck reports **unhealthy**. Check `!logs {target}`.")

@@ -280,10 +280,11 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("started" in c for c in calls))
         mock_loop.create_task.assert_not_called()
 
-    async def test_start_command_with_healthcheck_waits_before_reporting_started(self):
+    async def test_start_command_with_healthcheck_defers_to_background_task(self):
         """A container with a HEALTHCHECK must not get an immediate "started"
-        reply -- start() should send an interim message and hand off to a
-        background _wait_for_healthy task instead."""
+        reply -- start() sends only "Starting..." and hands off to a
+        background _wait_for_healthy task for the single follow-up message,
+        so !start still produces exactly two messages end-to-end."""
         from src import bot as bot_module
 
         ctx = MagicMock()
@@ -306,12 +307,17 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
                 with patch.object(bot_module.bot, "loop", mock_loop):
                     await bot_module.start.callback(ctx, container_name=None)
 
-        calls = [c[0][0] for c in ctx.send.call_args_list]
-        self.assertTrue(any("waiting for its healthcheck" in c for c in calls))
-        self.assertFalse(any(c.strip() == "started" for c in calls))
+        # start() itself only ever sends "Starting {target}..." here -- the
+        # eventual "started"/unhealthy/timeout reply is the background task's job.
+        ctx.send.assert_called_once()
+        self.assertIn("Starting", ctx.send.call_args[0][0])
         mock_loop.create_task.assert_called_once()
 
     async def test_wait_for_healthy_reports_healthy(self):
+        """Once health flips to healthy, the follow-up message must be the
+        same success message start_container() returned ("started") -- so a
+        healthcheck-backed container ends up with the identical two-message
+        shape ("Starting...", "started") as one without a healthcheck."""
         from src import bot as bot_module
 
         ctx = MagicMock()
@@ -323,11 +329,9 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
                     "src.bot.docker_control.run_blocking",
                     new=self._start_run_blocking(health="healthy"),
                 ):
-                    await bot_module._wait_for_healthy(ctx, "server1")
+                    await bot_module._wait_for_healthy(ctx, "server1", "started")
 
-        msg = ctx.send.call_args[0][0]
-        self.assertIn("healthy", msg)
-        self.assertIn("✅", msg)
+        ctx.send.assert_called_once_with("started")
 
     async def test_wait_for_healthy_reports_unhealthy(self):
         from src import bot as bot_module
@@ -341,7 +345,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
                     "src.bot.docker_control.run_blocking",
                     new=self._start_run_blocking(health="unhealthy"),
                 ):
-                    await bot_module._wait_for_healthy(ctx, "server1")
+                    await bot_module._wait_for_healthy(ctx, "server1", "started")
 
         msg = ctx.send.call_args[0][0]
         self.assertIn("unhealthy", msg)
@@ -361,7 +365,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
                     new=self._start_run_blocking(health="starting"),
                 ):
                     with patch("src.bot.asyncio.sleep", new=AsyncMock()):
-                        await bot_module._wait_for_healthy(ctx, "server1")
+                        await bot_module._wait_for_healthy(ctx, "server1", "started")
 
         msg = ctx.send.call_args[0][0]
         self.assertIn("giving up", msg)
