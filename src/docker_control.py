@@ -111,6 +111,21 @@ def container_status(name: str) -> Optional[str]:
     return c.status
 
 
+def container_health(name: str) -> Optional[str]:
+    """Return the container's Docker healthcheck status ("starting", "healthy",
+    "unhealthy"), or None if the container is disallowed/not found, or simply
+    has no healthcheck configured -- callers must treat None as "no health data",
+    not as an error, since most containers won't define one."""
+    if not _check_allowed(name):
+        return None
+    client = _get_client()
+    c = _find_container_by_name(client, name)
+    if not c:
+        return None
+    c.reload()
+    return c.attrs.get("State", {}).get("Health", {}).get("Status")
+
+
 def container_logs(name: str, lines: int = 50) -> Optional[str]:
     """Fetch the last *lines* lines of container logs."""
     if not _check_allowed(name):

@@ -78,6 +78,8 @@ Enable **Developer Mode** in Discord (User Settings > Advanced) to copy IDs by r
 | `CRASH_CHECK_INTERVAL` | | Seconds between container status polls for crash alerting | `30` |
 | `CRASH_ALERT_CHANNEL_ID` | | Channel for crash alerts (falls back to `ANNOUNCE_CHANNEL_ID`) | `0` |
 | `HISTORY_FILE` | | Path to command history JSON file | `data/history.json` |
+| `HEALTHCHECK_POLL_INTERVAL` | | Seconds between health polls after `!start`, for containers with a Docker `HEALTHCHECK` | `5` |
+| `HEALTHCHECK_MAX_WAIT` | | Seconds `!start` watches a healthcheck before giving up (`0` = no limit) | `1800` |
 
 See [.env.example](.env.example) for a copy-paste template.
 
@@ -89,14 +91,14 @@ All commands use the `!` prefix. Container name is optional when only one contai
 
 | Command | Permission | Description |
 |---|---|---|
-| `!start [container]` | `start` | Start the container |
+| `!start [container]` | `start` | Start the container. If it defines a Docker `HEALTHCHECK`, the bot reports "started" only once the healthcheck reports healthy (see `HEALTHCHECK_POLL_INTERVAL`/`HEALTHCHECK_MAX_WAIT`); otherwise it reports success as soon as the container process launches |
 | `!stop [container]` | `stop` | Announce shutdown, wait for delay, then stop |
 | `!stop [container] now` | `stop` + `stop_now` | Immediately stop (skips countdown, cancels pending) |
 | `!restart [container]` | `restart` | Announce restart, wait for delay, then restart |
 | `!restart [container] now` | `restart` + `restart_now` | Immediately restart (skips countdown, cancels pending) |
 | `!cancel` | `cancel` | Cancel all pending stop/restart countdowns across every container |
 | `!announce [container] <message>` | `announce` | Send a message to the server console |
-| `!status [container]` | — | Show container status and any pending stop/restart countdown |
+| `!status [container]` | — | Show container status, Docker healthcheck status (if configured), and any pending stop/restart countdown |
 | `!guide` | — | Show a quick command reference |
 
 ### Info
@@ -126,7 +128,9 @@ Discord Administrators bypass all permission checks.
 
 **`GET /healthz`** — Unauthenticated liveness check. Returns `{"ok": true}` whenever the process is running. Used by the Docker healthcheck; also safe to use for external uptime monitoring.
 
-**`GET /status`** — Returns, as JSON: container status, the full role-permission map, and the last 50 log lines (which include Discord usernames, user IDs, channel names, and every command typed). Treat this endpoint as sensitive.
+**`GET /status`** — Returns, as JSON: per-container status and Docker healthcheck state, the full role-permission map, and the last 50 log lines (which include Discord usernames, user IDs, channel names, and every command typed). Treat this endpoint as sensitive.
+
+Each entry under `containers` is `{"status": "<docker status>", "health": "<healthy|unhealthy|starting|null>"}`. `health` is `null` for containers that don't define a `HEALTHCHECK` — most containers won't, and that's expected, not an error.
 
 Authentication (when `STATUS_TOKEN` is set):
 - Header: `X-Auth-Token: <token>` (preferred — doesn't land in proxy/access logs)

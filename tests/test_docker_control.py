@@ -121,6 +121,46 @@ class TestDockerControl(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertIn("not allowed", result.message)
 
+    # --- container_health ---
+
+    @patch("src.docker_control.docker.from_env")
+    def test_container_health_reports_status(self, mock_from_env):
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.containers.get.return_value = mock_container
+        mock_container.attrs = {"State": {"Health": {"Status": "healthy"}}}
+
+        with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
+            self.assertEqual(docker_control.container_health("my_game_server"), "healthy")
+
+    @patch("src.docker_control.docker.from_env")
+    def test_container_health_none_when_no_healthcheck_configured(self, mock_from_env):
+        """A container with no HEALTHCHECK has no "Health" key in State at all --
+        this must come back as None, not raise or return a bogus status."""
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.containers.get.return_value = mock_container
+        mock_container.attrs = {"State": {"Status": "running"}}
+
+        with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
+            self.assertIsNone(docker_control.container_health("my_game_server"))
+
+    def test_container_health_disallowed_container(self):
+        self.assertIsNone(docker_control.container_health("evil_container"))
+
+    @patch("src.docker_control.docker.from_env")
+    def test_container_health_container_not_found(self, mock_from_env):
+        import docker
+
+        mock_client = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.containers.get.side_effect = docker.errors.NotFound("not found", MagicMock())
+
+        with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
+            self.assertIsNone(docker_control.container_health("my_game_server"))
+
     @patch("src.docker_control.docker.from_env")
     def test_announce_in_game_no_message_placeholder(self, mock_from_env):
         """When CONTAINER_MESSAGE_CMD has no {message} placeholder the else-branch is used."""

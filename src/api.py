@@ -48,7 +48,11 @@ def root():
 def status():
     out = {}
     for name in ALLOWED_CONTAINERS:
-        out[name] = docker_control.container_status(name)
+        # health is None for containers with no Docker healthcheck configured
+        out[name] = {
+            "status": docker_control.container_status(name),
+            "health": docker_control.container_health(name),
+        }
 
     current_perms = permissions.list_permissions()
 

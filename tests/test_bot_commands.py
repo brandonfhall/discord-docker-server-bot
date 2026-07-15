@@ -2,7 +2,7 @@ import asyncio
 import unittest
 from unittest.mock import ANY, AsyncMock, MagicMock, patch
 
-from src import docker_control
+from src import docker_control, history
 from src.state import state
 
 
@@ -246,19 +246,153 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     # --- start command ---
 
+    @staticmethod
+    def _start_run_blocking(status="running", health=None):
+        """Route run_blocking calls by function identity so start_container,
+        container_status, and container_health can each return something
+        different -- start() now calls all three."""
+
+        async def fake(func, *args, **kwargs):
+            if func is docker_control.start_container:
+                return docker_control.Result(True, "started")
+            if func is docker_control.container_status:
+                return status
+            if func is docker_control.container_health:
+                return health
+            return None
+
+        return fake
+
     async def test_start_command(self):
+        """No healthcheck configured (health=None) -- unchanged behavior:
+        reports "started" immediately, no background wait is scheduled."""
         from src import bot as bot_module
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
+        mock_loop = MagicMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
-            with patch(
-                "src.bot.docker_control.run_blocking", new=AsyncMock(return_value=docker_control.Result(True, "started"))
-            ):
-                await bot_module.start.callback(ctx, container_name=None)
+            with patch("src.bot.docker_control.run_blocking", new=self._start_run_blocking()):
+                with patch.object(bot_module.bot, "loop", mock_loop):
+                    await bot_module.start.callback(ctx, container_name=None)
         calls = [c[0][0] for c in ctx.send.call_args_list]
         self.assertTrue(any("Starting" in c for c in calls))
         self.assertTrue(any("started" in c for c in calls))
+        mock_loop.create_task.assert_not_called()
+
+    async def test_start_command_with_healthcheck_defers_to_background_task(self):
+        """A container with a HEALTHCHECK must not get an immediate "started"
+        reply -- start() sends only "Starting..." and hands off to a
+        background _wait_for_healthy task for the single follow-up message,
+        so !start still produces exactly two messages end-to-end."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+
+        mock_task = MagicMock()
+        mock_loop = MagicMock()
+
+        def _create_task(coro):
+            coro.close()  # don't actually run the background poll in this test
+            return mock_task
+
+        mock_loop.create_task.side_effect = _create_task
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch(
+                "src.bot.docker_control.run_blocking",
+                new=self._start_run_blocking(health="starting"),
+            ):
+                with patch.object(bot_module.bot, "loop", mock_loop):
+                    await bot_module.start.callback(ctx, container_name=None)
+
+        # start() itself only ever sends "Starting {target}..." here -- the
+        # eventual "started"/unhealthy/timeout reply is the background task's job.
+        ctx.send.assert_called_once()
+        self.assertIn("Starting", ctx.send.call_args[0][0])
+        mock_loop.create_task.assert_called_once()
+
+    async def test_wait_for_healthy_reports_healthy(self):
+        """Once health flips to healthy, the follow-up message must be the
+        same success message start_container() returned ("started") -- so a
+        healthcheck-backed container ends up with the identical two-message
+        shape ("Starting...", "started") as one without a healthcheck."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+
+        with patch.object(bot_module, "HEALTHCHECK_POLL_INTERVAL", 0):
+            with patch.object(bot_module, "HEALTHCHECK_MAX_WAIT", 5):
+                with patch(
+                    "src.bot.docker_control.run_blocking",
+                    new=self._start_run_blocking(health="healthy"),
+                ):
+                    await bot_module._wait_for_healthy(ctx, "server1", "started")
+
+        ctx.send.assert_called_once_with("started")
+
+    async def test_wait_for_healthy_reports_unhealthy(self):
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+
+        with patch.object(bot_module, "HEALTHCHECK_POLL_INTERVAL", 0):
+            with patch.object(bot_module, "HEALTHCHECK_MAX_WAIT", 5):
+                with patch(
+                    "src.bot.docker_control.run_blocking",
+                    new=self._start_run_blocking(health="unhealthy"),
+                ):
+                    await bot_module._wait_for_healthy(ctx, "server1", "started")
+
+        msg = ctx.send.call_args[0][0]
+        self.assertIn("unhealthy", msg)
+
+    async def test_wait_for_healthy_gives_up_after_max_wait(self):
+        """If health never leaves 'starting', _wait_for_healthy must not poll
+        forever -- it should bail out once HEALTHCHECK_MAX_WAIT elapses."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+
+        with patch.object(bot_module, "HEALTHCHECK_POLL_INTERVAL", 1):
+            with patch.object(bot_module, "HEALTHCHECK_MAX_WAIT", 2):
+                with patch(
+                    "src.bot.docker_control.run_blocking",
+                    new=self._start_run_blocking(health="starting"),
+                ):
+                    with patch("src.bot.asyncio.sleep", new=AsyncMock()):
+                        await bot_module._wait_for_healthy(ctx, "server1", "started")
+
+        msg = ctx.send.call_args[0][0]
+        self.assertIn("giving up", msg)
+
+    async def test_start_command_already_running(self):
+        """A failed start_container() (e.g. "already running") must report that
+        message directly and never touch health at all."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        mock_loop = MagicMock()
+
+        async def fake_run_blocking(func, *args, **kwargs):
+            if func is docker_control.start_container:
+                return docker_control.Result(False, "already running")
+            if func is history.record:
+                return None
+            raise AssertionError(f"unexpected run_blocking call: {func}")
+
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.docker_control.run_blocking", new=fake_run_blocking):
+                with patch.object(bot_module.bot, "loop", mock_loop):
+                    await bot_module.start.callback(ctx, container_name=None)
+
+        self.assertEqual(ctx.send.call_args[0][0], "already running")
+        mock_loop.create_task.assert_not_called()
 
     async def test_start_command_disallowed_container(self):
         from src import bot as bot_module
@@ -302,18 +436,66 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     # --- status command ---
 
+    @staticmethod
+    def _status_run_blocking(status=None, health=None):
+        """Build a run_blocking fake that routes container_status/container_health
+        to distinct return values, since status_cmd now calls both."""
+
+        async def fake(func, *args, **kwargs):
+            if func is docker_control.container_status:
+                return status
+            if func is docker_control.container_health:
+                return health
+            return None
+
+        return fake
+
     async def test_status_command(self):
         from src import bot as bot_module
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
         with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
-            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="running")):
+            with patch(
+                "src.bot.docker_control.run_blocking",
+                new=self._status_run_blocking(status="running"),
+            ):
                 await bot_module.status_cmd.callback(ctx, container_name=None)
         ctx.send.assert_called_once()
         msg = ctx.send.call_args[0][0]
         self.assertIn("running", msg)
         self.assertNotIn("Pending", msg)
+        self.assertNotIn("Health", msg)
+
+    async def test_status_command_shows_health_when_configured(self):
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch(
+                "src.bot.docker_control.run_blocking",
+                new=self._status_run_blocking(status="running", health="healthy"),
+            ):
+                await bot_module.status_cmd.callback(ctx, container_name=None)
+        msg = ctx.send.call_args[0][0]
+        self.assertIn("Health: **healthy**", msg)
+
+    async def test_status_command_omits_health_when_not_configured(self):
+        """Containers without a Docker healthcheck return health=None -- the
+        !status output shouldn't print a Health line for them at all."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch(
+                "src.bot.docker_control.run_blocking",
+                new=self._status_run_blocking(status="running", health=None),
+            ):
+                await bot_module.status_cmd.callback(ctx, container_name=None)
+        msg = ctx.send.call_args[0][0]
+        self.assertNotIn("Health", msg)
 
     async def test_status_command_shows_pending_op(self):
         from datetime import datetime, timezone
@@ -329,7 +511,10 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
             ctx = MagicMock()
             ctx.send = AsyncMock()
             with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
-                with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="running")):
+                with patch(
+                    "src.bot.docker_control.run_blocking",
+                    new=self._status_run_blocking(status="running"),
+                ):
                     await bot_module.status_cmd.callback(ctx, container_name=None)
             msg = ctx.send.call_args[0][0]
             self.assertIn("running", msg)

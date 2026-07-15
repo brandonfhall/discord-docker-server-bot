@@ -56,14 +56,14 @@ See the [full variable list](https://github.com/brandonfhall/discord-docker-serv
 
 | Command | Description |
 |---|---|
-| `!start [container]` | Start the container |
+| `!start [container]` | Start the container (waits for a healthy Docker healthcheck before reporting "started", if the container defines one) |
 | `!stop [container]` | Announce shutdown, wait for delay, then stop |
 | `!stop [container] now` | Immediately stop (requires `stop_now` permission) |
 | `!restart [container]` | Announce restart, wait for delay, then restart |
 | `!restart [container] now` | Immediately restart (requires `restart_now` permission) |
 | `!cancel` | Cancel all pending stop/restart countdowns across every container |
 | `!announce [container] <message>` | Send a message to the server console |
-| `!status [container]` | Show container status and any pending stop/restart countdown |
+| `!status [container]` | Show container status, healthcheck status (if configured), and any pending stop/restart countdown |
 | `!logs [container] [lines]` | View recent container logs |
 | `!stats [container]` | Show container CPU/memory usage |
 | `!history [count]` | View recent command history |
