@@ -14,7 +14,7 @@ A Discord bot that controls Docker containers (game servers, services, etc.) thr
 - **Resource Stats** — Monitor container CPU and memory usage with `!stats`.
 - **Crash Alerting** — Automatic Discord notifications when a container unexpectedly stops.
 - **Command History** — Audit log of all bot commands with `!history`.
-- **Maintenance Mode** — Temporarily disable all container commands with `!maintenance on`.
+- **Maintenance Mode** — Temporarily disable all container commands with `!maintenance on`. Persists across bot restarts; cleared only by an explicit `!maintenance off`.
 - **Command Cooldowns** — Per-user rate limiting to prevent command spam.
 - **Role-Based Permissions** — Restrict commands to specific Discord roles, manageable live via `!perm` commands.
 - **Guild & Channel Locking** — Restrict the bot to a specific Discord server and/or set of channels.
@@ -78,6 +78,7 @@ Enable **Developer Mode** in Discord (User Settings > Advanced) to copy IDs by r
 | `CRASH_CHECK_INTERVAL` | | Seconds between container status polls for crash alerting | `30` |
 | `CRASH_ALERT_CHANNEL_ID` | | Channel for crash alerts (falls back to `ANNOUNCE_CHANNEL_ID`) | `0` |
 | `HISTORY_FILE` | | Path to command history JSON file | `data/history.json` |
+| `MAINTENANCE_FILE` | | Path to persisted maintenance-mode state (`{mode, reason}`) | `data/maintenance.json` |
 | `HEALTHCHECK_POLL_INTERVAL` | | Seconds between health polls after `!start`, for containers with a Docker `HEALTHCHECK` | `5` |
 | `HEALTHCHECK_MAX_WAIT` | | Seconds `!start` watches a healthcheck before giving up (`0` = no limit) | `1800` |
 
@@ -113,8 +114,8 @@ All commands use the `!` prefix. Container name is optional when only one contai
 
 | Command | Permission | Description |
 |---|---|---|
-| `!maintenance on [reason]` | `maintenance` | Enable maintenance mode (blocks all container commands, cancels pending countdowns) |
-| `!maintenance off` | `maintenance` | Disable maintenance mode |
+| `!maintenance on [reason]` | `maintenance` | Enable maintenance mode (blocks all container commands, cancels pending countdowns). Persisted to `MAINTENANCE_FILE`, so it survives a bot restart. |
+| `!maintenance off` | `maintenance` | Disable maintenance mode. Also persisted — this is the only way to clear it. |
 | `!maintenance` | `maintenance` | Show current maintenance mode status |
 | `!perm list` | Admin | List roles allowed for each action |
 | `!perm add <action> <role>` | Admin | Grant a role permission for an action |

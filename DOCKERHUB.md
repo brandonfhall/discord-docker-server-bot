@@ -52,7 +52,7 @@ volumes:
 | `HEALTHCHECK_POLL_INTERVAL` | | Seconds between health polls after `!start`, for containers with a Docker `HEALTHCHECK` | `5` |
 | `HEALTHCHECK_MAX_WAIT` | | Seconds `!start` watches a healthcheck before giving up (`0` = no limit) | `1800` |
 
-See the [full variable list](https://github.com/brandonfhall/discord-docker-server-bot#environment-variables) for additional options (`STATUS_PORT`, `LOG_LEVEL`, `HISTORY_FILE`, etc.).
+See the [full variable list](https://github.com/brandonfhall/discord-docker-server-bot#environment-variables) for additional options (`STATUS_PORT`, `LOG_LEVEL`, `HISTORY_FILE`, `MAINTENANCE_FILE`, etc.).
 
 ## Commands
 
@@ -69,7 +69,7 @@ See the [full variable list](https://github.com/brandonfhall/discord-docker-serv
 | `!logs [container] [lines]` | View recent container logs |
 | `!stats [container]` | Show container CPU/memory usage |
 | `!history [count]` | View recent command history |
-| `!maintenance on/off [reason]` | Toggle maintenance mode (enabling cancels pending countdowns) |
+| `!maintenance on/off [reason]` | Toggle maintenance mode (enabling cancels pending countdowns). Persists across restarts — cleared only by `!maintenance off` |
 | `!guide` | Quick command reference |
 | `!perm list` | List role permissions (admin only) |
 | `!perm add <action> <role>` | Grant permission (admin only) |

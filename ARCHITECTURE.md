@@ -30,14 +30,14 @@ src/
   docker_control.py  — Docker SDK wrappers; container-name allowlist + message sanitizer
   permissions.py     — JSON-backed role permission store with mtime cache
   history.py         — Thread-safe append-only command history/audit log
-  atomic_io.py       — Atomic, fsync'd JSON write helper shared by permissions.py and history.py
+  atomic_io.py       — Atomic, fsync'd JSON write helper shared by permissions.py, history.py, and state.py
   logging_config.py  — Root logger setup + RedactingFilter
-  state.py           — BotState singleton (pending_ops, pending_op_info, maintenance flags, last_known_status)
+  state.py           — BotState singleton (pending_ops, pending_op_info, maintenance flags + persistence, last_known_status)
 
 tests/
   conftest.py           — Sets required/test-only env vars (BOT_TOKEN, ALLOWED_CONTAINERS, DISCORD_GUILD_ID,
-                          plus tmp paths for LOG_FILE/HISTORY_FILE so test runs don't write into the repo's
-                          data/ directory), resets state/permissions cache per test
+                          plus tmp paths for LOG_FILE/HISTORY_FILE/PERMISSIONS_FILE/MAINTENANCE_FILE so test
+                          runs don't write into the repo's data/ directory), resets state/permissions cache per test
   test_config.py        — Config parsing tests
   test_docker_control.py — Docker SDK wrapper tests (logs, stats, control ops)
   test_permissions.py   — Permission store tests
@@ -45,7 +45,7 @@ tests/
   test_api.py           — FastAPI /status endpoint tests
   test_logging.py       — RedactingFilter tests
   test_crash_alerting.py — Crash detection loop tests
-  test_state.py         — BotState and command history tests
+  test_state.py         — BotState, command history, and maintenance-persistence tests
 
 .github/
   dependabot.yml     — Weekly pip, github-actions, docker base image updates (grouped)
@@ -111,6 +111,11 @@ A single lazily-constructed `_docker_client` is reused for the lifetime of the p
 - Toggled via `!maintenance on/off`. `BotState.is_maintenance_active()` takes no argument and just returns `state.maintenance_mode`. The six container-mutating commands (`start`, `stop`/`restart` via `_delayed_container_op`, `announce`, `logs`, `stats`) each start with `if await _bail_if_maintenance(ctx): return` — a shared `bot.py` helper that checks `is_maintenance_active()`, sends the maintenance message, and reports whether the caller should bail (C1: replaces five copies of the same three-line check). `cancel`, `status`, `guide`, `history`, `perm*`, and `maintenance` itself never call it, so they remain available during maintenance mode by construction rather than through an exemption list — `cancel` deliberately so, since enabling maintenance already cancels everything and cancelling during maintenance is harmless.
 - `maintenance_cmd` intentionally has no `@commands.cooldown`: an admin must be able to toggle it again immediately during an active incident.
 - Enabling maintenance calls `state.cancel_all_pending()`, which cancels and removes all in-flight stop/restart countdowns. The cancelled container names are included in the confirmation message.
+- **Persistence (L4):** `{mode, reason}` is persisted to `MAINTENANCE_FILE` (default `data/maintenance.json`) on every toggle — both the `on` and `off` branches of `maintenance_cmd` call `BotState.save_maintenance(path)` via `docker_control.run_blocking()`, reusing `atomic_io.atomic_write_json()` (the same helper `permissions.py`/`history.py` use) rather than a fourth hand-rolled JSON writer. This is deliberate: a bot restart (crash, host reboot, image update — `restart: unless-stopped` makes this routine) must never silently resume scheduled work on a server the operator believes is frozen. Maintenance is cleared only by an explicit `!maintenance off`, never by a restart.
+  - **Startup load:** `BotState.load_maintenance(path)` is called once from `main()` in [src/bot.py](src/bot.py), *before* `bot.run()` — not from `BotState.__init__`, since `state` is a module-level singleton constructed at import time (before config/logging are ready), and not from `on_ready` either, since `on_ready` can fire again on reconnect and would re-read the file needlessly. `main()` runs synchronously before the event loop starts, so the blocking read happens directly rather than via `run_blocking`.
+  - State mutation (`load_maintenance`/`save_maintenance`) lives in `state.py` per house rules; `state.py` still doesn't import `config.py` — the caller in `bot.py` passes `MAINTENANCE_FILE` in as a parameter, keeping `state.py` a pure state/I-O helper with no config coupling.
+  - **Corruption tolerance:** a missing file means normal first run (maintenance defaults off). A corrupt/unreadable file logs at ERROR and defaults to off rather than crashing startup, matching the resilience posture of `permissions.py`'s corruption handling — the bot must always start.
+  - `data/maintenance.json` is runtime state (covered by `.gitignore`'s `data/`), not a secret, though it holds the operator-supplied reason string verbatim.
 
 ### Crash detection loop
 

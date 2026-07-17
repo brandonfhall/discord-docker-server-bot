@@ -16,6 +16,10 @@ os.environ.setdefault("HISTORY_FILE", os.path.join(tempfile.gettempdir(), "disco
 # read/write paths, which would otherwise create/mutate data/permissions.json
 # in the working tree.
 os.environ.setdefault("PERMISSIONS_FILE", os.path.join(tempfile.gettempdir(), "discord-bot-tests-permissions.json"))
+# Same problem for MAINTENANCE_FILE: maintenance_cmd persists on every toggle
+# (L4), which would otherwise create/mutate data/maintenance.json in the
+# working tree during tests that exercise the real (unmocked) handler.
+os.environ.setdefault("MAINTENANCE_FILE", os.path.join(tempfile.gettempdir(), "discord-bot-tests-maintenance.json"))
 
 import pytest
 from src.state import state

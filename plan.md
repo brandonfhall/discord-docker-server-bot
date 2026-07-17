@@ -19,8 +19,8 @@ a one-line entry here — only residual notes (deviations, decisions, gotchas) a
 | 5 | L1, L2, L3 — docker_control | ✅ done — `9dea118` |
 | 6 | L5, L6, C1, C2, C3 — bot.py UX + consolidation | ✅ done — `b898f2f` |
 | 7 | L7, L8, L11, C4, L10 — hygiene + docs | ✅ done — `46aedbe` |
-| 8 | L4 — persist maintenance mode | ☐ **next** |
-| 9 | Docs + architecture accuracy audit | ☐ not started |
+| 8 | L4 — persist maintenance mode | ✅ done — `f5d3cb5` |
+| 9 | Docs + architecture accuracy audit | ☐ **next** |
 | 10 | Final plan.md prune | ☐ not started |
 
 **Maintainer decisions (2026-07-17), binding for this cycle:**
@@ -231,26 +231,13 @@ decodes with `errors="replace"`. 224 tests (+4).
 single argv element (not re-split), and the `/bin/sh -c` path embeds it as literal text. Don't assume
 "all hyphens neutralized" if this sanitizer is ever reused for a differently-parsed sink.
 
-### L4 — Maintenance mode does not survive a bot restart *(DECIDED: persist — Phase 8)*
+### L4 — persist maintenance mode — ✅ DONE (Phase 8, `f5d3cb5`)
 
-**Location:** [src/state.py](src/state.py):10–11; toggled at [src/bot.py](src/bot.py):715–733.
-
-**Maintainer decision (2026-07-17): persist it.** Maintenance is a deliberate operator action and must
-be cleared only by a deliberate `!maintenance off` — never silently by a restart. Implement the
-persist option below; ignore the warn-on-restart alternative. Sequenced after Phase 3 so it reuses the
-atomic-write helper M5 introduces rather than duplicating it. Docs: README `!maintenance` rows +
-ARCHITECTURE.md Maintenance-mode section must state that the flag survives restarts and where it's stored.
-
-An operator enables maintenance, the bot restarts (crash, host reboot, image update —
-`restart: unless-stopped` makes this routine), and maintenance is silently off; scheduled work
-resumes on a server the operator believes is frozen.
-**Fix (recommended = persist):** persist `{mode, reason}` to a small JSON in `data/` (same atomic-write
-pattern as M5) on toggle; load at startup. Keep it out of config.py — it's runtime state. The cheaper
-alternative is a startup WARNING + announce-channel message "bot restarted; maintenance mode was
-reset" — acceptable, but leaves the footgun. Document the chosen behavior in README (`!maintenance`
-rows) and ARCHITECTURE.md's Maintenance-mode section.
-**Test:** `test_state.py`: toggle on → construct a fresh `BotState` (reload path) → still on, reason
-preserved.
+Maintenance `{mode, reason}` persisted to `MAINTENANCE_FILE` (default `data/maintenance.json`,
+gitignored) on every toggle via `atomic_io.atomic_write_json`; loaded once in `main()` before
+`bot.run()`. State mutation in state.py; path passed in (no config import). Corrupt/missing file →
+off, never crashes startup. Survives a simulated restart (verified). 238 tests (+5). Docs updated
+across .env.example, README, DOCKERHUB, ARCHITECTURE, CLAUDE.
 
 ### L5 / L6 — bot.py UX + logging — ✅ DONE (Phase 6, `b898f2f`)
 

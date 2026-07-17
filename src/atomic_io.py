@@ -1,15 +1,14 @@
 """Atomic, fsync'd JSON file writes.
 
 Standalone leaf module: stdlib-only, no imports from other project modules.
-This is deliberate — `permissions.py` and `history.py` both need atomic JSON
-writes, but they must not import from each other (that would create a
-domain-crossing dependency between the permission store and the audit log).
-A future maintenance-state file needs the same logic too. Since neither
-`config.py` (which has import-time side effects: `load_dotenv()` and
-fail-fast validation) nor `state.py` (the BotState singleton) is an
-appropriate home for pure file-I/O infrastructure, this gets its own module
-that both permissions.py and history.py can depend on without coupling to
-each other.
+This is deliberate — `permissions.py`, `history.py`, and `state.py` (for
+persisted maintenance mode, L4) all need atomic JSON writes, but they must
+not import from each other (that would create domain-crossing dependencies
+between the permission store, the audit log, and bot state). Since
+`config.py` has import-time side effects (`load_dotenv()` and fail-fast
+validation) that make it an inappropriate dependency for these modules, this
+gets its own leaf module that each of them can depend on without coupling to
+one another.
 """
 
 import json

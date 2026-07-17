@@ -2061,6 +2061,42 @@ class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
         await bot_module.maintenance_cmd.callback(ctx, toggle=None, reason="")
         self.assertIn("OFF", ctx.send.call_args[0][0])
 
+    async def test_maintenance_on_persists_to_disk(self):
+        """L4: !maintenance on must persist {mode, reason} via
+        state.save_maintenance so the flag survives a restart. Exercises the
+        real (unmocked) handler; MAINTENANCE_FILE is redirected to a tmp path
+        by conftest, so this writes there rather than into the working tree."""
+        import json
+        import os
+
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+
+        try:
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    await bot_module.maintenance_cmd.callback(ctx, toggle="on", reason="Patching disks")
+
+            self.assertTrue(os.path.exists(bot_module.MAINTENANCE_FILE))
+            with open(bot_module.MAINTENANCE_FILE) as f:
+                data = json.load(f)
+            self.assertEqual(data, {"mode": True, "reason": "Patching disks"})
+
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    await bot_module.maintenance_cmd.callback(ctx, toggle="off", reason="")
+
+            with open(bot_module.MAINTENANCE_FILE) as f:
+                data = json.load(f)
+            self.assertEqual(data, {"mode": False, "reason": ""})
+        finally:
+            if os.path.exists(bot_module.MAINTENANCE_FILE):
+                os.remove(bot_module.MAINTENANCE_FILE)
+
     async def test_maintenance_blocks_start(self):
         bot_module = self.bot_module
         state.maintenance_mode = True

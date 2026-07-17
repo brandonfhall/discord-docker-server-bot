@@ -85,6 +85,8 @@ CRASH_ALERT_CHANNEL_ID = _int_env("CRASH_ALERT_CHANNEL_ID", 0)
 
 HISTORY_FILE = os.getenv("HISTORY_FILE", "").strip() or "data/history.json"
 
+MAINTENANCE_FILE = os.getenv("MAINTENANCE_FILE", "").strip() or "data/maintenance.json"
+
 HEALTHCHECK_POLL_INTERVAL = _int_env("HEALTHCHECK_POLL_INTERVAL", 5, minimum=1)
 
 HEALTHCHECK_MAX_WAIT = _int_env("HEALTHCHECK_MAX_WAIT", 1800, minimum=0)

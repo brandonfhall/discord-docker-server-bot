@@ -26,6 +26,7 @@ from .config import (
     HISTORY_FILE,
     HEALTHCHECK_POLL_INTERVAL,
     HEALTHCHECK_MAX_WAIT,
+    MAINTENANCE_FILE,
 )
 from .logging_config import setup_logging
 from .state import state
@@ -800,6 +801,7 @@ async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
         logging.info(f"User {ctx.author} enabled maintenance mode: {state.maintenance_reason}")
         if cancelled:
             logging.info(f"Cancelled pending operations for: {', '.join(cancelled)}")
+        await docker_control.run_blocking(state.save_maintenance, MAINTENANCE_FILE)
         await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "maintenance on", "")
         msg = f"Maintenance mode **enabled**. Reason: {state.maintenance_reason}"
         if cancelled:
@@ -810,6 +812,7 @@ async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
         state.maintenance_mode = False
         state.maintenance_reason = ""
         logging.info(f"User {ctx.author} disabled maintenance mode")
+        await docker_control.run_blocking(state.save_maintenance, MAINTENANCE_FILE)
         await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "maintenance off", "")
         await ctx.send("Maintenance mode **disabled**. All commands are available again.")
         await send_announcement(ctx, "**Maintenance mode ended.** All commands are available again.")
@@ -890,6 +893,13 @@ async def perm_error(ctx, error):
 
 
 def main():
+    # Load persisted maintenance mode before the event loop starts. This runs
+    # exactly once per process (unlike on_ready, which can fire again on
+    # reconnect) and there's no event loop yet to stall, so the blocking read
+    # happens directly rather than via run_blocking.
+    state.load_maintenance(MAINTENANCE_FILE)
+    status = "ON" if state.maintenance_mode else "OFF"
+    logging.info(f"Maintenance mode loaded from {os.path.abspath(MAINTENANCE_FILE)}: {status}")
     threading.Thread(target=start_api, daemon=True).start()
     bot.run(BOT_TOKEN)
 
