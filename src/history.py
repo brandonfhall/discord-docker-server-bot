@@ -5,6 +5,8 @@ import os
 import threading
 from datetime import datetime, timezone
 
+from .atomic_io import atomic_write_json
+
 _lock = threading.Lock()
 _MAX_ENTRIES = 200
 
@@ -26,8 +28,7 @@ def save(history_file: str, entries: list):
     if hist_dir:
         os.makedirs(hist_dir, exist_ok=True)
     entries = entries[-_MAX_ENTRIES:]
-    with open(history_file, "w") as f:
-        json.dump(entries, f, indent=2)
+    atomic_write_json(history_file, entries, indent=2)
 
 
 def record(history_file: str, user, command: str, container: str = ""):

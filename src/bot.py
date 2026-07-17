@@ -16,6 +16,7 @@ from .config import (
     ALLOWED_CONTAINERS,
     DISCORD_GUILD_ID,
     LOG_FILE,
+    LOG_LEVEL,
     ANNOUNCE_CHANNEL_ID,
     ANNOUNCE_ROLE_ID,
     ALLOWED_CHANNEL_IDS,
@@ -25,6 +26,7 @@ from .config import (
     HISTORY_FILE,
     HEALTHCHECK_POLL_INTERVAL,
     HEALTHCHECK_MAX_WAIT,
+    MAINTENANCE_FILE,
 )
 from .logging_config import setup_logging
 from .state import state
@@ -32,7 +34,7 @@ from .state import state
 VALID_ACTIONS = permissions.ALL_ACTIONS
 
 
-setup_logging(LOG_FILE, os.getenv("LOG_LEVEL", "INFO"), [BOT_TOKEN, STATUS_TOKEN])
+setup_logging(LOG_FILE, LOG_LEVEL, [BOT_TOKEN, STATUS_TOKEN])
 
 intents = discord.Intents.default()
 intents.message_content = True
@@ -82,10 +84,24 @@ def has_permission(action: str):
     async def predicate(ctx):
         if ctx.author.guild_permissions.administrator:
             return True
-        allowed = permissions.is_member_allowed(action, ctx.author)
+        allowed = await docker_control.run_blocking(permissions.is_member_allowed, action, ctx.author)
         return allowed
 
     return commands.check(predicate)
+
+
+async def _bail_if_maintenance(ctx) -> bool:
+    """If maintenance mode is active, send the maintenance message and return True.
+
+    Callers should `return` immediately when this returns True. Only
+    container-mutating commands (start, stop/restart via _delayed_container_op,
+    announce, logs, stats) call this; cancel, status, maintenance itself,
+    perm*, guide, and history deliberately do not (see C1/ARCHITECTURE.md).
+    """
+    if state.is_maintenance_active():
+        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
+        return True
+    return False
 
 
 async def resolve_container(ctx, name: str):
@@ -99,11 +115,9 @@ async def resolve_container(ctx, name: str):
     if len(ALLOWED_CONTAINERS) == 1:
         return ALLOWED_CONTAINERS[0]
 
-    if len(ALLOWED_CONTAINERS) > 1:
-        await ctx.send(f"Multiple containers configured. Please specify one: {', '.join(ALLOWED_CONTAINERS)}")
-        return None
-
-    await ctx.send("No allowed containers configured.")
+    # ALLOWED_CONTAINERS can never be empty here -- config.py raises at import
+    # time if it is (C3) -- so the only remaining case is "more than one".
+    await ctx.send(f"Multiple containers configured. Please specify one: {', '.join(ALLOWED_CONTAINERS)}")
     return None
 
 
@@ -160,7 +174,11 @@ async def on_command(ctx):
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
-        logging.info(f"Bot sent: '{message.content}' to {message.channel}")
+        # L6: log metadata only, not content -- full content here would echo
+        # !logs/!history replies (up to ~1900 chars of container log) into
+        # bot.log, which /status then re-serves, amplifying noise and aging
+        # real events out of the log window faster.
+        logging.info(f"Bot sent {len(message.content)} chars to {message.channel}")
     await bot.process_commands(message)
 
 
@@ -215,24 +233,38 @@ async def on_command_error(ctx, error):
 
 @tasks.loop(seconds=CRASH_CHECK_INTERVAL)
 async def crash_check_loop():
-    """Polls container statuses and alerts if one unexpectedly stops."""
+    """Polls container statuses and alerts if one unexpectedly stops or is removed."""
     # state.last_known_status is populated here on first run
     for name in ALLOWED_CONTAINERS:
         try:
             current = await docker_control.run_blocking(docker_control.container_status, name)
         except Exception:
             continue
+        if current == "error":
+            # container_status() returns the literal "error" when the Docker
+            # daemon itself was unreachable for this poll (M2) -- that's a
+            # transient daemon blip, not a real state change. Skip updating the
+            # baseline and skip alerting: overwriting last_known_status here
+            # would either mask a real crash that happened during the outage,
+            # or -- if we alerted on it -- fire a false "removed" alert for
+            # every container on every daemon hiccup (M4's ordering note).
+            logging.warning(f"Skipping crash check for '{name}': docker daemon unreachable")
+            continue
         prev = state.last_known_status.get(name)
         state.last_known_status[name] = current
-        # Alert when a container transitions from running to non-running
-        if prev == "running" and current and current != "running":
-            logging.warning(f"Crash alert: container '{name}' changed from running to {current}")
+        # Alert when a container transitions from running to anything else,
+        # including removal -- container_status() returns None for a container
+        # that was force-removed while running (`docker rm -f`), which is
+        # exactly the scenario crash alerting exists to catch (M4).
+        if prev == "running" and current != "running":
+            status_desc = current or "removed/not found"
+            logging.warning(f"Crash alert: container '{name}' changed from running to {status_desc}")
             channel_id = CRASH_ALERT_CHANNEL_ID or ANNOUNCE_CHANNEL_ID
             if channel_id:
                 ch = bot.get_channel(channel_id)
                 if ch:
                     try:
-                        await ch.send(f"**Crash Alert:** Container `{name}` is now **{current}** (was running).")
+                        await ch.send(f"**Crash Alert:** Container `{name}` is now **{status_desc}** (was running).")
                     except Exception as e:
                         logging.error(f"Failed to send crash alert: {e}")
 
@@ -243,9 +275,11 @@ async def _before_crash_check():
     # Seed initial statuses so we don't false-alert on startup
     for name in ALLOWED_CONTAINERS:
         try:
-            state.last_known_status[name] = await docker_control.run_blocking(docker_control.container_status, name)
+            status = await docker_control.run_blocking(docker_control.container_status, name)
         except Exception:
-            pass
+            continue
+        if status != "error":
+            state.last_known_status[name] = status
 
 
 @bot.command()
@@ -253,24 +287,27 @@ async def _before_crash_check():
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def start(ctx, container_name: str = None):
     """Starts the container."""
-    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
-        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
+    if await _bail_if_maintenance(ctx):
         return
     target = await resolve_container(ctx, container_name)
     if not target:
         return
     logging.info(f"User {ctx.author} requested START for container '{target}'")
     await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "start", target)
-    await ctx.send(f"Starting {target}...")
+    starting_msg = f"Starting {target}..."
+    if state.has_pending_op(target):
+        # L5: inform, don't block -- a pending stop/restart countdown will
+        # still kill the container it's scheduled against a few minutes after
+        # this start succeeds, unless the user cancels it.
+        starting_msg += f"\nNote: a stop/restart countdown is scheduled for `{target}` -- `!cancel` to abort."
+    await ctx.send(starting_msg)
     res = await docker_control.run_blocking(docker_control.start_container, target)
     logging.info(f"START result for {ctx.author}: {res.message}")
     if not res.success:
         await ctx.send(res.message)
         return
 
-    # Re-seed the crash-alerting baseline so the next poll doesn't see a
-    # stale "not running" status and fire a false crash alert.
-    state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
+    await _reseed_crash_baseline(target)
 
     health = await docker_control.run_blocking(docker_control.container_health, target)
     if health is None:
@@ -311,12 +348,41 @@ async def _wait_for_healthy(ctx, target: str, success_message: str):
             if health == "unhealthy":
                 await ctx.send(f"`{target}` started but its healthcheck reports **unhealthy**. Check `!logs {target}`.")
                 return
+            if health is None:
+                # We only ever schedule this watcher when the initial health
+                # read was non-None (see start()), so a None here mid-wait
+                # means the container went away, was recreated without a
+                # HEALTHCHECK, or the daemon was briefly unreachable -- not
+                # "still starting". Treat it as terminal instead of spinning
+                # for the full HEALTHCHECK_MAX_WAIT (up to 30 min, or forever
+                # if HEALTHCHECK_MAX_WAIT == 0) and then reporting a status
+                # that was never true (M3).
+                await ctx.send(
+                    f"`{target}` no longer reports health status (it may have been stopped or recreated). "
+                    f"Check `!status {target}`."
+                )
+                return
         await ctx.send(
             f"`{target}` is still `starting` after {HEALTHCHECK_MAX_WAIT}s -- giving up watching. "
             f"Check `!status {target}` for the current state."
         )
     except Exception as e:
         logging.error(f"Error while waiting for '{target}' to become healthy: {e}", exc_info=True)
+
+
+async def _reseed_crash_baseline(target: str):
+    """Re-seed the crash-alerting baseline after a bot-initiated start/stop/restart.
+
+    Without this, the next crash_check_loop poll would still see the
+    pre-operation status in state.last_known_status (e.g. "exited" right
+    after a start, or "running" right after a stop) and either miss a real
+    transition or fire a false crash alert for a change the bot itself just
+    made. A stored "error" here (M2: daemon unreachable for this read) is
+    self-correcting -- crash_check_loop's `prev == "running"` alert check
+    never matches "error", so it just delays the next real baseline update
+    rather than causing a false alert.
+    """
+    state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
 
 
 def _format_delay(seconds: int) -> str:
@@ -333,8 +399,7 @@ def _format_delay(seconds: int) -> str:
 
 async def _delayed_container_op(ctx, *args, action, now_action, docker_func, immediate_msg, countdown_msg_tpl, verb):
     """Shared logic for stop and restart commands with optional 'now' flag."""
-    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
-        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
+    if await _bail_if_maintenance(ctx):
         return
 
     now = any(a.lower() == "now" for a in args)
@@ -354,13 +419,20 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
         if action != "stop":
             return False
         current_status = await docker_control.run_blocking(docker_control.container_status, target)
+        if current_status == "error":
+            # Daemon unreachable (M2) -- don't tell the user the container
+            # isn't running when the truth is we couldn't check.
+            await ctx.send(f"Could not check status for `{target}` -- the Docker daemon is unreachable. Try again shortly.")
+            return True
         if current_status != "running":
             await ctx.send(f"Container `{target}` is not running.")
             return True
         return False
 
     if now:
-        if not ctx.author.guild_permissions.administrator and not permissions.is_member_allowed(now_action, ctx.author):
+        if not ctx.author.guild_permissions.administrator and not await docker_control.run_blocking(
+            permissions.is_member_allowed, now_action, ctx.author
+        ):
             await ctx.send(f"You do not have permission to use `!{action} now`.")
             return
         logging.info(f"User {ctx.author} requested immediate {action.upper()} for container '{target}'")
@@ -374,9 +446,7 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
         res = await docker_control.run_blocking(docker_func, target)
         logging.info(f"Immediate {action.upper()} result for {ctx.author}: {res.message}")
         if res.success:
-            # Re-seed the crash-alerting baseline -- otherwise the next poll sees
-            # this bot-initiated stop/restart as an unexpected crash.
-            state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
+            await _reseed_crash_baseline(target)
         await ctx.send(f"{action.capitalize()} result: {res.message}")
         return
 
@@ -430,9 +500,7 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
             result = await docker_control.run_blocking(docker_func, target)
             logging.info(f"{action.upper()} execution result for {target}: {result.message}")
             if result.success:
-                # Re-seed the crash-alerting baseline -- otherwise the next poll sees
-                # this bot-initiated stop/restart as an unexpected crash.
-                state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
+                await _reseed_crash_baseline(target)
             await ctx.send(f"{action.capitalize()} result: {result.message}")
         except Exception as e:
             logging.error(f"Error during scheduled {action} of {target}: {e}", exc_info=True)
@@ -506,6 +574,19 @@ async def status_cmd(ctx, container_name: str = None):
         return
     logging.info(f"User {ctx.author} requested STATUS for container '{target}'")
     res = await docker_control.run_blocking(docker_control.container_status, target)
+    if res == "error":
+        # container_status() returns the literal "error" when the Docker daemon
+        # itself was unreachable (M2) -- tell the user that honestly instead of
+        # rendering "Status for `x`: **error**" with no explanation, or the old
+        # "not found" behavior a daemon outage used to produce.
+        await ctx.send(f"Could not check status for `{target}` -- the Docker daemon is unreachable. Try again shortly.")
+        return
+    if res is None:
+        # L5: container_status() returns None when no container by this name
+        # exists (as opposed to "error", handled above, for a daemon outage).
+        # Without this branch the fallback below renders "Status for `x`: **None**".
+        await ctx.send(f"Container `{target}` not found.")
+        return
     health = await docker_control.run_blocking(docker_control.container_health, target)
     lines = [f"Status for `{target}`: **{res}**"]
     if health:
@@ -533,8 +614,7 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
     Usage: !announce <message> (if single container)
            !announce <container_name> <message> (if multiple)
     """
-    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
-        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
+    if await _bail_if_maintenance(ctx):
         return
     target = None
     message = None
@@ -600,6 +680,11 @@ async def guide(ctx):
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
     """View recent container logs. Usage: !logs [container] [lines]"""
+    # L5: checked first, before arg-parsing, for consistency with every other
+    # maintenance-gated handler (start, _delayed_container_op, announce, stats).
+    if await _bail_if_maintenance(ctx):
+        return
+
     container_name = None
     lines = 25
     unrecognized = []
@@ -607,7 +692,9 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
         if arg is None:
             continue
         if arg.isdigit():
-            lines = min(int(arg), 50)
+            # L5: clamp to at least 1 -- "0" passes isdigit() but tail=0 yields
+            # an empty result and a confusing "No recent logs" reply.
+            lines = min(max(int(arg), 1), 50)
         elif arg in ALLOWED_CONTAINERS:
             container_name = arg
         else:
@@ -615,10 +702,6 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
 
     if unrecognized:
         await ctx.send(f"Unrecognized argument(s): {', '.join(unrecognized)}. Usage: `!logs [container] [lines]`")
-        return
-
-    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
-        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
         return
     target = await resolve_container(ctx, container_name)
     if not target:
@@ -644,8 +727,7 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def stats_cmd(ctx, container_name: str = None):
     """Show container CPU and memory usage."""
-    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
-        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
+    if await _bail_if_maintenance(ctx):
         return
     target = await resolve_container(ctx, container_name)
     if not target:
@@ -677,7 +759,7 @@ async def history_cmd(ctx, count: int = 10):
     """View recent command history. Usage: !history [count]"""
     logging.info(f"User {ctx.author} requested HISTORY")
     count = max(1, min(count, 25))
-    entries = history.load(HISTORY_FILE)
+    entries = await docker_control.run_blocking(history.load, HISTORY_FILE)
     if not entries:
         await ctx.send("No command history recorded yet.")
         return
@@ -719,6 +801,7 @@ async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
         logging.info(f"User {ctx.author} enabled maintenance mode: {state.maintenance_reason}")
         if cancelled:
             logging.info(f"Cancelled pending operations for: {', '.join(cancelled)}")
+        await docker_control.run_blocking(state.save_maintenance, MAINTENANCE_FILE)
         await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "maintenance on", "")
         msg = f"Maintenance mode **enabled**. Reason: {state.maintenance_reason}"
         if cancelled:
@@ -729,6 +812,7 @@ async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
         state.maintenance_mode = False
         state.maintenance_reason = ""
         logging.info(f"User {ctx.author} disabled maintenance mode")
+        await docker_control.run_blocking(state.save_maintenance, MAINTENANCE_FILE)
         await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "maintenance off", "")
         await ctx.send("Maintenance mode **disabled**. All commands are available again.")
         await send_announcement(ctx, "**Maintenance mode ended.** All commands are available again.")
@@ -750,7 +834,7 @@ async def perm_add(ctx, action: str, *, role_name: str):
     if action not in VALID_ACTIONS:
         await ctx.send(f"Unknown action `{action}`. Valid actions: {', '.join(sorted(VALID_ACTIONS))}")
         return
-    permissions.add_role(action, role_name)
+    await docker_control.run_blocking(permissions.add_role, action, role_name)
     logging.info(f"User {ctx.author} ADDED role '{role_name}' to action '{action}'")
     await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, f"perm add {action} {role_name}", "")
     await ctx.send(f"Added role {role_name} to {action}")
@@ -762,7 +846,7 @@ async def perm_remove(ctx, action: str, *, role_name: str):
     if action not in VALID_ACTIONS:
         await ctx.send(f"Unknown action `{action}`. Valid actions: {', '.join(sorted(VALID_ACTIONS))}")
         return
-    permissions.remove_role(action, role_name)
+    await docker_control.run_blocking(permissions.remove_role, action, role_name)
     logging.info(f"User {ctx.author} REMOVED role '{role_name}' from action '{action}'")
     await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, f"perm remove {action} {role_name}", "")
     await ctx.send(f"Removed role {role_name} from {action}")
@@ -772,7 +856,7 @@ async def perm_remove(ctx, action: str, *, role_name: str):
 async def perm_list(ctx):
     """Lists all permissions."""
     logging.info(f"User {ctx.author} requested PERM LIST")
-    data = permissions.list_permissions()
+    data = await docker_control.run_blocking(permissions.list_permissions)
     lines = [f"{k}: {', '.join(v)}" for k, v in data.items()]
     await ctx.send("\n".join(lines))
 
@@ -809,6 +893,13 @@ async def perm_error(ctx, error):
 
 
 def main():
+    # Load persisted maintenance mode before the event loop starts. This runs
+    # exactly once per process (unlike on_ready, which can fire again on
+    # reconnect) and there's no event loop yet to stall, so the blocking read
+    # happens directly rather than via run_blocking.
+    state.load_maintenance(MAINTENANCE_FILE)
+    status = "ON" if state.maintenance_mode else "OFF"
+    logging.info(f"Maintenance mode loaded from {os.path.abspath(MAINTENANCE_FILE)}: {status}")
     threading.Thread(target=start_api, daemon=True).start()
     bot.run(BOT_TOKEN)
 

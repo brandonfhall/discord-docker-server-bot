@@ -42,9 +42,9 @@ DOCKER_MAX_WORKERS = _int_env("DOCKER_MAX_WORKERS", 2, minimum=1)
 
 SHUTDOWN_DELAY = _int_env("SHUTDOWN_DELAY", 300, minimum=0)
 
-PERMISSIONS_FILE = os.getenv("PERMISSIONS_FILE", "data/permissions.json").strip()
+PERMISSIONS_FILE = os.getenv("PERMISSIONS_FILE", "").strip() or "data/permissions.json"
 
-LOG_FILE = os.getenv("LOG_FILE", "data/bot.log").strip()
+LOG_FILE = os.getenv("LOG_FILE", "").strip() or "data/bot.log"
 
 DISCORD_GUILD_ID = _int_env("DISCORD_GUILD_ID", 0)
 
@@ -83,8 +83,17 @@ CRASH_CHECK_INTERVAL = _int_env("CRASH_CHECK_INTERVAL", 30, minimum=5)
 
 CRASH_ALERT_CHANNEL_ID = _int_env("CRASH_ALERT_CHANNEL_ID", 0)
 
-HISTORY_FILE = os.getenv("HISTORY_FILE", "data/history.json").strip()
+HISTORY_FILE = os.getenv("HISTORY_FILE", "").strip() or "data/history.json"
+
+MAINTENANCE_FILE = os.getenv("MAINTENANCE_FILE", "").strip() or "data/maintenance.json"
 
 HEALTHCHECK_POLL_INTERVAL = _int_env("HEALTHCHECK_POLL_INTERVAL", 5, minimum=1)
 
 HEALTHCHECK_MAX_WAIT = _int_env("HEALTHCHECK_MAX_WAIT", 1800, minimum=0)
+
+_VALID_LOG_LEVELS = ("DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL")
+
+LOG_LEVEL = (os.getenv("LOG_LEVEL") or "INFO").strip().upper()
+if LOG_LEVEL not in _VALID_LOG_LEVELS:
+    print(f"WARNING: LOG_LEVEL={LOG_LEVEL!r} is not a valid log level, using default INFO", file=sys.stderr)
+    LOG_LEVEL = "INFO"

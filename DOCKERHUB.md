@@ -49,14 +49,16 @@ volumes:
 | `COMMAND_COOLDOWN` | | Per-user command cooldown in seconds | `5` |
 | `CRASH_CHECK_INTERVAL` | | Seconds between crash-detection polls | `30` |
 | `CRASH_ALERT_CHANNEL_ID` | | Channel for crash alerts | `0` (uses `ANNOUNCE_CHANNEL_ID`) |
+| `HEALTHCHECK_POLL_INTERVAL` | | Seconds between health polls after `!start`, for containers with a Docker `HEALTHCHECK` | `5` |
+| `HEALTHCHECK_MAX_WAIT` | | Seconds `!start` watches a healthcheck before giving up (`0` = no limit) | `1800` |
 
-See the [full variable list](https://github.com/brandonfhall/discord-docker-server-bot#environment-variables) for additional options (`STATUS_PORT`, `LOG_LEVEL`, `HISTORY_FILE`, etc.).
+See the [full variable list](https://github.com/brandonfhall/discord-docker-server-bot#environment-variables) for additional options (`STATUS_PORT`, `LOG_LEVEL`, `HISTORY_FILE`, `MAINTENANCE_FILE`, etc.).
 
 ## Commands
 
 | Command | Description |
 |---|---|
-| `!start [container]` | Start the container (waits for a healthy Docker healthcheck before reporting "started", if the container defines one) |
+| `!start [container]` | Start the container (waits for a healthy Docker healthcheck before reporting "started", if the container defines one). Warns (but doesn't block) if a stop/restart countdown is already scheduled for the container |
 | `!stop [container]` | Announce shutdown, wait for delay, then stop |
 | `!stop [container] now` | Immediately stop (requires `stop_now` permission) |
 | `!restart [container]` | Announce restart, wait for delay, then restart |
@@ -67,7 +69,7 @@ See the [full variable list](https://github.com/brandonfhall/discord-docker-serv
 | `!logs [container] [lines]` | View recent container logs |
 | `!stats [container]` | Show container CPU/memory usage |
 | `!history [count]` | View recent command history |
-| `!maintenance on/off [reason]` | Toggle maintenance mode (enabling cancels pending countdowns) |
+| `!maintenance on/off [reason]` | Toggle maintenance mode (enabling cancels pending countdowns). Persists across restarts — cleared only by `!maintenance off` |
 | `!guide` | Quick command reference |
 | `!perm list` | List role permissions (admin only) |
 | `!perm add <action> <role>` | Grant permission (admin only) |

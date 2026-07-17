@@ -1,14 +1,17 @@
 import json
 import os
+import stat
+import sys
+import tempfile
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src import permissions
 
 
 class TestPermissions(unittest.TestCase):
     def setUp(self):
-        self.test_file = "test_permissions.json"
+        self.test_file = os.path.join(tempfile.gettempdir(), "discord-bot-test-permissions.json")
         self.original_file = permissions.PERMISSIONS_FILE
         permissions.PERMISSIONS_FILE = self.test_file
 
@@ -16,6 +19,16 @@ class TestPermissions(unittest.TestCase):
         permissions.PERMISSIONS_FILE = self.original_file
         if os.path.exists(self.test_file):
             os.remove(self.test_file)
+        corrupt_file = self.test_file + ".corrupt"
+        if os.path.exists(corrupt_file):
+            os.remove(corrupt_file)
+        # Clean up any leftover atomic-write temp files from mocked-out
+        # os.replace tests (the real rename never happens in those cases).
+        directory = os.path.dirname(self.test_file) or "."
+        prefix = os.path.basename(self.test_file) + "."
+        for name in os.listdir(directory):
+            if name.startswith(prefix) and name.endswith(".tmp"):
+                os.remove(os.path.join(directory, name))
 
     def test_default_permissions_creation(self):
         if os.path.exists(self.test_file):
@@ -37,6 +50,63 @@ class TestPermissions(unittest.TestCase):
         self.assertIsInstance(data, dict)
         self.assertIn("start", data)
         self.assertTrue(os.path.exists(self.test_file))
+
+    def test_load_corrupted_file_preserves_original_as_corrupt_sibling(self):
+        """Corruption recovery must not destroy evidence: the bad file is
+        renamed to <file>.corrupt (not deleted), and the live file gets
+        fresh defaults."""
+        garbage = "not valid json {{{ this is garbage"
+        with open(self.test_file, "w") as f:
+            f.write(garbage)
+
+        data = permissions._load()
+
+        corrupt_path = self.test_file + ".corrupt"
+        self.assertTrue(os.path.exists(corrupt_path))
+        with open(corrupt_path, "r") as f:
+            self.assertEqual(f.read(), garbage)
+
+        # Live file holds fresh defaults, not the garbage.
+        self.assertIsInstance(data, dict)
+        self.assertIn("start", data)
+        with open(self.test_file, "r") as f:
+            on_disk = json.load(f)
+        self.assertEqual(on_disk, data)
+
+    def test_load_falls_back_to_defaults_when_preserve_fails(self):
+        """If os.replace (the corrupt-file preserve step) itself fails -- e.g. a
+        read-only/permission-broken data dir -- _load must degrade to in-memory
+        defaults rather than let JSONDecodeError escape (L12)."""
+        garbage = "not valid json {{{ this is garbage"
+        with open(self.test_file, "w") as f:
+            f.write(garbage)
+
+        with patch("src.permissions.os.replace", side_effect=OSError("read-only filesystem")):
+            data = permissions._load()
+
+        self.assertIsInstance(data, dict)
+        self.assertIn("start", data)
+        self.assertEqual(set(data.keys()), set(permissions.ALL_ACTIONS))
+        # The on-disk file is untouched -- still the original garbage -- since
+        # the preserve/reinit never actually succeeded.
+        with open(self.test_file, "r") as f:
+            self.assertEqual(f.read(), garbage)
+
+    def test_save_uses_atomic_replace_not_in_place_truncation(self):
+        """_save must go through os.replace (atomic rename) rather than
+        truncating the live file in place."""
+        with patch("src.atomic_io.os.replace") as mock_replace:
+            permissions._save({"start": ["Admin"]})
+            mock_replace.assert_called_once()
+
+    def test_save_preserves_0o600_mode(self):
+        """An atomic replace must not silently widen the permissions file's
+        mode to a temp-file default."""
+        if sys.platform.startswith("win"):
+            self.skipTest("POSIX file mode bits not meaningful on Windows")
+        permissions._save({"start": ["Admin"]})
+        actual_mode = stat.S_IMODE(os.stat(self.test_file).st_mode)
+        self.assertEqual(actual_mode, 0o600)
 
     def test_is_member_allowed(self):
         with open(self.test_file, "w") as f:

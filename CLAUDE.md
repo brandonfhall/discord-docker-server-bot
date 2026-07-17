@@ -35,7 +35,7 @@ docker compose -f docker-compose.dev.yml up --build
 docker build . --file Dockerfile --tag bot-test:latest
 ```
 
-Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`, `DISCORD_GUILD_ID`) are set by [tests/conftest.py](tests/conftest.py); don't re-set them in individual tests. `conftest.py` also redirects `LOG_FILE`/`HISTORY_FILE` to a tmp path so test runs don't write into the repo's `data/` directory.
+Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`, `DISCORD_GUILD_ID`) are set by [tests/conftest.py](tests/conftest.py); don't re-set them in individual tests. `conftest.py` also redirects `LOG_FILE`/`HISTORY_FILE`/`PERMISSIONS_FILE`/`MAINTENANCE_FILE` to a tmp path so test runs don't write into the repo's `data/` directory.
 
 ## House rules
 
@@ -53,7 +53,7 @@ Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`, `DISCORD_GUILD_ID`) are set by
 2. Add `@commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)` unless there's a reason not to.
 3. If the command introduces a new permission action, add it to `ALL_ACTIONS` in [src/permissions.py](src/permissions.py) (single source of truth — `bot.py` re-exports it as `VALID_ACTIONS`).
 4. Call `await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "<action>", target)` for auditable actions.
-5. If the command mutates containers, also check `state.is_maintenance_active(...)` and bail with a maintenance message.
+5. If the command mutates containers, start the handler with `if await _bail_if_maintenance(ctx): return` (it sends the maintenance message and returns True when blocked). Read-only/admin commands (`cancel`, `status`, `perm*`, `guide`, `history`, `maintenance`) deliberately skip this.
 6. Add unit tests in the matching file under [tests/](tests/) (e.g. a new bot command goes in [tests/test_bot_commands.py](tests/test_bot_commands.py)). Follow the existing `unittest.IsolatedAsyncioTestCase` patterns with `AsyncMock` for `ctx.send`.
 7. Update the Commands table in both [README.md](README.md) and [DOCKERHUB.md](DOCKERHUB.md).
 
@@ -63,6 +63,7 @@ Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`, `DISCORD_GUILD_ID`) are set by
 2. Import it from `.config` wherever it's used — don't call `os.getenv()` in handler code.
 3. Document it in [.env.example](.env.example) and the env-var table in [README.md](README.md).
 4. If it's a secret, add it to the token list in `setup_logging()`.
+5. **Add it to the `environment:` passthrough list in BOTH [docker-compose.yml](docker-compose.yml) and [docker-compose.dev.yml](docker-compose.dev.yml).** Both files use bare `- VAR` env passthrough — a var missing from either list is silently unconfigurable in that deployment (no error, no warning, just the default). This step is easy to skip because nothing fails without it — do it every time, not just when something breaks.
 
 ## Test conventions
 
@@ -70,14 +71,14 @@ Tests live in [tests/](tests/) split by concern:
 
 | File | What it covers |
 |---|---|
-| `test_config.py` | `TestConfig`, `TestNewConfig`, `TestGuildLockRequired` |
+| `test_config.py` | `TestConfig`, `TestNewConfig`, `TestGuildLockRequired`, `TestPathAndLogLevelConfig` |
 | `test_docker_control.py` | `TestDockerControl`, `TestDockerControlLogs`, `TestDockerControlStats` |
 | `test_permissions.py` | `TestPermissions` |
 | `test_bot_commands.py` | `TestBotLogic`, `TestPendingOps`, `TestStopNow`, `TestRestartNow`, `TestLogsCommand`, `TestStatsCommand`, `TestMaintenanceMode`, `TestCancelCommand`, `TestHistoryCommand`, `TestCooldownError`, `TestGuideUpdated` |
 | `test_api.py` | `TestHealthzEndpoint`, `TestStatusEndpoint` |
 | `test_logging.py` | `TestRedactingFilter` |
 | `test_crash_alerting.py` | `TestCrashAlerting` |
-| `test_state.py` | `TestCancelPending`, `TestCommandHistory` |
+| `test_state.py` | `TestCancelPending`, `TestCommandHistory`, `TestMaintenancePersistence` |
 
 - Unit tests mock the Docker SDK; don't introduce tests that require a real Docker daemon.
 - Use `conftest.py` fixtures (`_reset_state`, `_reset_permissions_cache`) — they already run automatically.

@@ -12,6 +12,14 @@ os.environ.setdefault("LOG_FILE", os.path.join(tempfile.gettempdir(), "discord-b
 # Same problem for HISTORY_FILE: handlers call history.record()/history.load()
 # unmocked in several tests, writing real entries to data/history.json otherwise.
 os.environ.setdefault("HISTORY_FILE", os.path.join(tempfile.gettempdir(), "discord-bot-tests-history.json"))
+# Same problem for PERMISSIONS_FILE: several tests exercise real permissions.py
+# read/write paths, which would otherwise create/mutate data/permissions.json
+# in the working tree.
+os.environ.setdefault("PERMISSIONS_FILE", os.path.join(tempfile.gettempdir(), "discord-bot-tests-permissions.json"))
+# Same problem for MAINTENANCE_FILE: maintenance_cmd persists on every toggle
+# (L4), which would otherwise create/mutate data/maintenance.json in the
+# working tree during tests that exercise the real (unmocked) handler.
+os.environ.setdefault("MAINTENANCE_FILE", os.path.join(tempfile.gettempdir(), "discord-bot-tests-maintenance.json"))
 
 import pytest
 from src.state import state

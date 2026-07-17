@@ -280,6 +280,30 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("started" in c for c in calls))
         mock_loop.create_task.assert_not_called()
 
+    async def test_start_command_warns_about_pending_op(self):
+        """L5.3: !start on a container with a scheduled stop/restart countdown
+        must warn in its reply (inform, don't block) -- otherwise the start
+        succeeds and the pending countdown silently kills it minutes later."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        mock_loop = MagicMock()
+
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        state.pending_ops["server1"] = mock_task
+        try:
+            with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+                with patch("src.bot.docker_control.run_blocking", new=self._start_run_blocking()):
+                    with patch.object(bot_module.bot, "loop", mock_loop):
+                        await bot_module.start.callback(ctx, container_name=None)
+            calls = [c[0][0] for c in ctx.send.call_args_list]
+            self.assertTrue(any("countdown is scheduled" in c for c in calls))
+            self.assertTrue(any("cancel" in c.lower() for c in calls))
+        finally:
+            state.pending_ops.pop("server1", None)
+
     async def test_start_command_with_healthcheck_defers_to_background_task(self):
         """A container with a HEALTHCHECK must not get an immediate "started"
         reply -- start() sends only "Starting..." and hands off to a
@@ -369,6 +393,37 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
         msg = ctx.send.call_args[0][0]
         self.assertIn("giving up", msg)
+
+    async def test_wait_for_healthy_exits_promptly_when_health_goes_none(self):
+        """M3: if the container stops/disappears mid-wait, container_health()
+        returns None. _wait_for_healthy must treat that as terminal on the very
+        next poll -- not spin for the full HEALTHCHECK_MAX_WAIT and then claim
+        it's "still starting" (which would be false on both counts)."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+
+        health_sequence = iter(["starting", None])
+
+        async def fake_run_blocking(func, *args, **kwargs):
+            if func is docker_control.container_health:
+                return next(health_sequence)
+            return None
+
+        with patch.object(bot_module, "HEALTHCHECK_POLL_INTERVAL", 0):
+            # A large max-wait proves the exit is triggered by the None health
+            # read, not by hitting the timeout.
+            with patch.object(bot_module, "HEALTHCHECK_MAX_WAIT", 1800):
+                with patch("src.bot.docker_control.run_blocking", new=fake_run_blocking):
+                    with patch("src.bot.asyncio.sleep", new=AsyncMock()):
+                        await bot_module._wait_for_healthy(ctx, "server1", "started")
+
+        ctx.send.assert_called_once()
+        msg = ctx.send.call_args[0][0]
+        self.assertIn("server1", msg)
+        self.assertIn("no longer reports health status", msg)
+        self.assertNotIn("still `starting`", msg)
 
     async def test_start_command_already_running(self):
         """A failed start_container() (e.g. "already running") must report that
@@ -523,6 +578,24 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         finally:
             state.pending_ops.clear()
             state.pending_op_info.clear()
+
+    async def test_status_command_not_found(self):
+        """L5.1: container_status() returning None (no such container) must
+        render a "not found" message, not "Status for `x`: **None**"."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch(
+                "src.bot.docker_control.run_blocking",
+                new=self._status_run_blocking(status=None),
+            ):
+                await bot_module.status_cmd.callback(ctx, container_name=None)
+        ctx.send.assert_called_once()
+        msg = ctx.send.call_args[0][0]
+        self.assertIn("not found", msg.lower())
+        self.assertNotIn("None", msg)
 
     # --- announce command ---
 
@@ -708,6 +781,12 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     # --- resolve_container ---
 
     async def test_resolve_container_empty_list(self):
+        """C3: an empty ALLOWED_CONTAINERS is unreachable in production (config.py
+        raises at import time if it's empty), so the dedicated "No allowed
+        containers configured" branch was dead code and has been removed.
+        Patching to [] here is an artificial state purely to exercise
+        resolve_container's remaining fallback -- it now falls through to the
+        same "Multiple containers configured" message used for len > 1."""
         from src import bot as bot_module
 
         ctx = MagicMock()
@@ -716,7 +795,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
             result = await bot_module.resolve_container(ctx, None)
         self.assertIsNone(result)
         ctx.send.assert_called_once()
-        self.assertIn("No allowed containers", ctx.send.call_args[0][0])
+        self.assertIn("Multiple containers configured", ctx.send.call_args[0][0])
 
     # --- send_announcement ---
 
@@ -1499,7 +1578,11 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         ctx.author.guild_permissions.administrator = False
 
         # L7: the pre-flight status check must see "running" to proceed.
+        # M6: is_member_allowed now also flows through run_blocking (dispatched
+        # here by identity, since it's itself a MagicMock with no __name__).
         async def mock_run_blocking(func, *args, **kwargs):
+            if func is mock_perm:
+                return func(*args, **kwargs)
             if func.__name__ == "container_status":
                 return "running"
             return docker_control.Result(True, "stopped")
@@ -1686,6 +1769,18 @@ class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
             with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="   ")):
                 await bot_module.logs_cmd.callback(ctx, arg1=None, arg2=None)
         self.assertIn("No recent logs", ctx.send.call_args[0][0])
+
+    async def test_logs_command_zero_lines_clamped_to_one(self):
+        """L5.2: `!logs 0` must not pass tail=0 through to Docker (which yields
+        an empty result and a confusing "No recent logs" reply) -- clamp to 1."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="output")) as mock_rb:
+                await bot_module.logs_cmd.callback(ctx, arg1="0", arg2=None)
+        mock_rb.assert_any_call(docker_control.container_logs, "server1", 1)
 
     async def test_logs_command_unrecognized_arg_shows_usage(self):
         """L6: a typo'd container name (e.g. `!logs tyop_container`) must not
@@ -1966,6 +2061,42 @@ class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
         await bot_module.maintenance_cmd.callback(ctx, toggle=None, reason="")
         self.assertIn("OFF", ctx.send.call_args[0][0])
 
+    async def test_maintenance_on_persists_to_disk(self):
+        """L4: !maintenance on must persist {mode, reason} via
+        state.save_maintenance so the flag survives a restart. Exercises the
+        real (unmocked) handler; MAINTENANCE_FILE is redirected to a tmp path
+        by conftest, so this writes there rather than into the working tree."""
+        import json
+        import os
+
+        bot_module = self.bot_module
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel = MagicMock()
+        ctx.channel.id = 100
+        ctx.channel.send = AsyncMock()
+
+        try:
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    await bot_module.maintenance_cmd.callback(ctx, toggle="on", reason="Patching disks")
+
+            self.assertTrue(os.path.exists(bot_module.MAINTENANCE_FILE))
+            with open(bot_module.MAINTENANCE_FILE) as f:
+                data = json.load(f)
+            self.assertEqual(data, {"mode": True, "reason": "Patching disks"})
+
+            with patch.object(bot_module, "ANNOUNCE_CHANNEL_ID", 0):
+                with patch.object(bot_module, "ANNOUNCE_ROLE_ID", 0):
+                    await bot_module.maintenance_cmd.callback(ctx, toggle="off", reason="")
+
+            with open(bot_module.MAINTENANCE_FILE) as f:
+                data = json.load(f)
+            self.assertEqual(data, {"mode": False, "reason": ""})
+        finally:
+            if os.path.exists(bot_module.MAINTENANCE_FILE):
+                os.remove(bot_module.MAINTENANCE_FILE)
+
     async def test_maintenance_blocks_start(self):
         bot_module = self.bot_module
         state.maintenance_mode = True
@@ -2015,7 +2146,7 @@ class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
 
     def test_check_maintenance_blocks_control_commands(self):
         state.maintenance_mode = True
-        self.assertTrue(state.is_maintenance_active("start"))
+        self.assertTrue(state.is_maintenance_active())
 
 
 class TestCancelCommand(unittest.IsolatedAsyncioTestCase):
