@@ -29,6 +29,8 @@ services:
       - CRASH_CHECK_INTERVAL
       - CRASH_ALERT_CHANNEL_ID
       - HISTORY_FILE
+      - HEALTHCHECK_POLL_INTERVAL
+      - HEALTHCHECK_MAX_WAIT
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock # Defaults to rw, required for start/stop
       - bot_data:/app/data

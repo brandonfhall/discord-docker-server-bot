@@ -1,7 +1,38 @@
 # Code Review Findings & Remediation Plan — Cycle 2
 
-**Branch:** `fable-review-2` · **Reviewed at commit:** `74f0ac2` (main) · **Date:** 2026-07-17
+**Branch:** `fable-review` · **Reviewed at commit:** `618a71a` (main) · **Date:** 2026-07-17
 **Reviewer:** Claude Fable 5 (senior architecture review) · **Implementers:** Sonnet / Opus
+
+## Progress
+
+Phases are implemented one at a time by a Sonnet worker, reviewed by Fable, and committed
+individually. Each phase also updates the documentation its own change touches; Phase 9 is an
+independent top-to-bottom doc/architecture audit on top of that. Completed findings are compressed to
+a one-line entry here — only residual notes (deviations, decisions, gotchas) are kept.
+
+| Phase | Findings | Status |
+|---|---|---|
+| 1 | M1 — compose env passthrough | ✅ done — `b64a986` |
+| 2 | M2 → M4 → M3 — Docker error paths | ☐ **next** |
+| 3 | M5 — atomic writes | ☐ not started |
+| 4 | M6 — event-loop I/O | ☐ not started |
+| 5 | L1, L2, L3 — docker_control | ☐ not started |
+| 6 | L5, L6, C1, C2, C3 — bot.py UX + consolidation | ☐ not started |
+| 7 | L7, L8, C4 — deps/config/test hygiene | ☐ not started |
+| 8 | L4 — persist maintenance mode | ☐ not started |
+| 9 | Docs + architecture accuracy audit | ☐ not started |
+| 10 | Final plan.md prune | ☐ not started |
+
+**Maintainer decisions (2026-07-17), binding for this cycle:**
+- **L4 → persist.** Maintenance mode gets a state file in `data/`; it must survive restarts and be
+  cleared only by an explicit `!maintenance off`. Sequenced as Phase 8 so it reuses M5's atomic-write
+  helper rather than duplicating it.
+- **L9 → CLOSED, won't fix.** The `?token=` query param on `/status` stays. Rationale: this bot runs
+  locally and is not internet-reachable; any proxy access log capturing the token lives on the same
+  host as `STATUS_TOKEN` itself, so the param leaks nothing an attacker wouldn't already hold.
+  **Do not re-flag in cycle 3.**
+- **L10 → document only.** No role-ID migration. README's permissions section must state that
+  permissions match by role *name* and that renaming a Discord role requires re-granting.
 
 **Cycle 1 status: ✅ CLOSED.** The previous version of this file (in git history at `5460432` and
 earlier) tracked 22 findings — all implemented, final-reviewed, and signed off (including follow-ups
@@ -33,27 +64,32 @@ here is architectural; module boundaries are sound and should not be reorganized
 
 ## MEDIUM
 
-### M1 — `docker-compose.yml` doesn't pass `HEALTHCHECK_POLL_INTERVAL` / `HEALTHCHECK_MAX_WAIT`, so the healthcheck-aware `!start` feature is silently unconfigurable in the documented production deployment
+### M1 — compose env passthrough gaps — ✅ DONE (Phase 1, `b64a986`)
 
-**Location:** [docker-compose.yml](docker-compose.yml) `environment:` block (lines ~13–33, ends at `HISTORY_FILE`); [docker-compose.dev.yml](docker-compose.dev.yml) `environment:` block (lines ~16–32).
+Both compose files now pass all 21 vars `config.py` reads; CLAUDE.md's "Adding a new env var"
+checklist gained the compose-passthrough step as the regression guard.
 
-**Problem:** compose uses env passthrough (`- VAR` entries), so any variable not listed never reaches
-the container. The two healthcheck vars added with the `!start` health-watch feature were never added
-to either compose file. A user who sets `HEALTHCHECK_MAX_WAIT=300` in `.env` gets the default 1800
-silently — no warning anywhere. The dev compose is also missing `PERMISSIONS_FILE` and `LOG_FILE`
-(present in prod compose), so dev can't exercise custom paths.
-
-**Fix:**
-1. Add `- HEALTHCHECK_POLL_INTERVAL` and `- HEALTHCHECK_MAX_WAIT` to both compose files' `environment:` lists.
-2. Add `- PERMISSIONS_FILE` and `- LOG_FILE` to `docker-compose.dev.yml` for parity.
-3. **Guard against recurrence:** add a step to "Adding a new env var" in [CLAUDE.md](CLAUDE.md):
-   "Add it to the `environment:` passthrough list in both compose files." That checklist currently
-   stops at config.py / .env.example / README, which is exactly how this was missed.
-
-**Test:** compose files aren't unit-testable here; the CLAUDE.md checklist change is the regression
-guard. Optionally add a small pytest that extracts the env-var names referenced in `src/config.py`
-(the `os.getenv`/`_int_env` keys) and asserts each appears in both compose files' `environment:`
-lists — plain-text matching is fine; don't add a YAML dependency just for this.
+**Residual notes worth keeping:**
+- **Scope grew during review.** Beyond M1's four named vars, a mechanical cross-check of config.py's
+  full inventory against both files found `CONTAINER_MESSAGE_CMD` missing from `docker-compose.dev.yml`
+  — same bug class, and the worst instance: a dev setting a real screen/rcon template in `.env`
+  silently got the `echo` default, so `!announce` never exercised the `/bin/sh -c` template path in the
+  one environment that exists to test it. Fixed in the same commit with an inline comment explaining why.
+- **The gap-check is mechanical, and worth re-running** rather than eyeballing (this is how the
+  original drift went unnoticed):
+  ```sh
+  grep -oE '(os\.getenv\("|_int_env\(")[A-Z_]+' src/config.py | grep -oE '[A-Z_]+$' | sort -u > /tmp/cfg.txt
+  for f in docker-compose.yml docker-compose.dev.yml; do
+    sed -n '/environment:/,/^    [a-z]/p' $f | grep -oE '^\s+- [A-Z_]+' | grep -oE '[A-Z_]+' | sort -u > /tmp/have.txt
+    echo "MISSING from $f:"; comm -23 /tmp/cfg.txt /tmp/have.txt
+  done
+  ```
+  Both lists came back empty at `b64a986`. **Phase 9 should re-run this** after all code phases land.
+- **No automated test was added.** The optional pytest guard (assert every config.py var appears in
+  both compose lists) was considered and skipped — the CLAUDE.md checklist plus the snippet above are
+  the guard. If this drifts a *second* time, promote it to a real test; a third occurrence means the
+  procedural guard doesn't work.
+- **L11 was discovered by this cross-check** (`LOG_LEVEL` bypasses config.py) — see below, deferred to Phase 7.
 
 ---
 
@@ -225,9 +261,15 @@ A game console emitting latin-1/binary turns a successful announce into
 **Fix:** `decode("utf-8", errors="replace")` — matching `container_logs` at line 138.
 **Test:** mock `exec_run` output `b"\xff"` with `exit_code=0` → success `Result`.
 
-### L4 — Maintenance mode does not survive a bot restart *(CEO decision needed)*
+### L4 — Maintenance mode does not survive a bot restart *(DECIDED: persist — Phase 8)*
 
 **Location:** [src/state.py](src/state.py):10–11; toggled at [src/bot.py](src/bot.py):715–733.
+
+**Maintainer decision (2026-07-17): persist it.** Maintenance is a deliberate operator action and must
+be cleared only by a deliberate `!maintenance off` — never silently by a restart. Implement the
+persist option below; ignore the warn-on-restart alternative. Sequenced after Phase 3 so it reuses the
+atomic-write helper M5 introduces rather than duplicating it. Docs: README `!maintenance` rows +
+ARCHITECTURE.md Maintenance-mode section must state that the flag survives restarts and where it's stored.
 
 An operator enables maintenance, the bot restarts (crash, host reboot, image update —
 `restart: unless-stopped` makes this routine), and maintenance is silently off; scheduled work
@@ -290,25 +332,49 @@ for all three.
 **Test:** `test_config.py`: reload config with `LOG_FILE=""` → default used (follow the existing
 `TestNewConfig` reload pattern).
 
-### L9 — `/status` still accepts the token as a `?token=` query parameter *(CEO decision needed)*
+### L9 — `/status` accepts the token as a `?token=` query parameter — ✅ CLOSED, WON'T FIX
 
-**Location:** [src/api.py](src/api.py):24–34.
+**Location:** [src/api.py](src/api.py):24–34. **No code change. Do not implement.**
 
-Carried over from cycle 1 (that resolution kept it, documenting header-preferred). Flagging once for a
-this-cycle decision: query-string tokens land in reverse-proxy/access logs and browser history. With
-the port loopback-bound by default the exposure is small. **Recommended:** deprecate — keep accepting
-it but log a WARNING when a query token is used, and remove in the next breaking release. Alternative:
-accept permanently and record that decision here so cycle 3 doesn't re-flag it.
+**Maintainer decision (2026-07-17): accepted permanently.** The generic objection to query-string
+tokens (they land in proxy access logs, browser history, Referer headers) does not buy an attacker
+anything in this deployment: the bot runs locally, is not internet-reachable, and any proxy log
+capturing the token sits on the same host as `STATUS_TOKEN` itself. Header auth remains documented as
+preferred. **Do not re-flag in cycle 3** — this is a closed decision, not an oversight. Revisit only
+if the deployment model changes (i.e. `/status` becomes reachable from an untrusted network, or the
+proxy tier moves to a different trust boundary than the token).
 
-### L10 — Role-name-based permissions silently break when a Discord role is renamed *(CEO decision needed; recommend document-only)*
+### L11 — `LOG_LEVEL` is read with `os.getenv` in `bot.py`, bypassing `config.py` entirely *(found during Phase 1 review)*
+
+**Location:** [src/bot.py](src/bot.py):35 — `setup_logging(LOG_FILE, os.getenv("LOG_LEVEL", "INFO"), [...])`.
+
+`LOG_LEVEL` is the only env var the app reads outside `config.py`, directly violating CLAUDE.md's
+"Adding a new env var" rule #2 ("Import it from `.config` wherever it's used — don't call
+`os.getenv()` in handler code"). It is not parsed or validated in `config.py` at all, so unlike every
+other var it gets no fallback warning: an invalid value (`LOG_LEVEL=verbose`) silently resolves to
+INFO via `getattr(logging, ..., logging.INFO)` in [src/logging_config.py](src/logging_config.py):42.
+
+Not a bug — both compose files pass it and the fallback is safe — but it's the exact drift M1 exists
+to prevent, and it means the env-var inventory in `config.py` is incomplete for anyone auditing it.
+**Fix:** parse `LOG_LEVEL = (os.getenv("LOG_LEVEL") or "INFO").strip().upper()` in `config.py`
+(warning on an unrecognized level, following the `_int_env` philosophy), import it in `bot.py`, and
+drop the `os` import there if it becomes unused (it won't — `os.path.abspath` is used at lines 147–148).
+Fold into **Phase 7** with the other config hygiene (L8).
+**Test:** `test_config.py` — an invalid `LOG_LEVEL` falls back to INFO with a warning.
+
+### L10 — Role-name-based permissions silently break when a Discord role is renamed *(DECIDED: document only — Phase 7)*
 
 **Location:** [src/permissions.py](src/permissions.py):94–98; the storage format is role *names*.
 
 Renaming "ServerAdmin" in Discord instantly revokes every grant tied to it, with no signal to anyone.
 Role IDs are rename-stable, but migrating (store IDs, resolve names on `!perm add`, display names on
-`!perm list`) changes the file format and needs a migration path for existing installs — **not
-recommended now**. Recommended: document the limitation in README's permissions section
-("permissions match by role name; renaming a role requires re-granting") and move on.
+`!perm list`) changes the file format and needs a migration path for existing installs.
+
+**Maintainer decision (2026-07-17): document the limitation, no code change.** No role-ID migration
+this cycle. **Deliverable:** a note in README's permissions section stating that permissions are
+matched by role *name*, and that renaming a Discord role silently revokes its grants and requires
+re-granting via `!perm add`. Fold into Phase 7 (docs-only). Known limitation, deliberately accepted —
+revisit only if this bot is distributed beyond single-server use, where the migration cost only grows.
 
 ---
 
@@ -367,23 +433,32 @@ CLAUDE.md's test-env note).
 
 ---
 
-## Suggested implementation order
+## Phase plan (execution order)
 
-1. **M1** alone — tiny, compose + docs only; unblocks anyone deploying the healthcheck feature.
-2. **M2 → M4 → M3** in one PR — M4's correctness depends on M2's exception behavior (see M4), and M3
-   lives in the same error-path neighborhood.
-3. **M5** alone — permissions/history write paths; wants careful tests.
-4. **M6** alone — mechanical, six call sites, zero behavior change; easy review.
-5. **L batch A** (docker_control.py): L1, L2, L3.
-6. **L batch B** (bot.py UX/log + cleanup): L5, L6, C1, C2, C3 — C1 and L5.4 overlap.
-7. **L batch C** (config/deps/tests): L7, L8, C4.
-8. **CEO decisions before implementing:** L4 (persist maintenance vs. warn-on-restart — recommend
-   persist), L9 (deprecate query token vs. close permanently — recommend deprecate), L10 (document vs.
-   role-ID migration — recommend document-only).
+One phase per Sonnet worker, reviewed by Fable, one commit each. See the Progress table at the top for
+live status.
 
-Every PR: `ruff check .` + `ruff format --check .` clean, full pytest green, and README / DOCKERHUB.md /
-ARCHITECTURE.md updated where the change is user-visible or convention-changing (M1, L4, L9, L10, C1
-all have doc impact).
+1. **M1** — compose env passthrough + CLAUDE.md checklist guard. Tiny; unblocks the healthcheck feature.
+2. **M2 → M4 → M3** — Docker error paths. M4's correctness depends on M2's exception behavior (see
+   M4's ordering note); M3 is the same neighborhood. Implement in that order within the phase.
+3. **M5** — atomic writes for permissions/history + non-destructive corruption recovery.
+4. **M6** — remaining event-loop I/O behind `run_blocking()`. Mechanical, six call sites, zero
+   behavior change. **Re-read the dedup-invariant warning below before touching `_delayed_container_op`.**
+5. **L1, L2, L3** — docker_control sanitizer/announce hardening.
+6. **L5, L6, C1, C2, C3** — bot.py UX + consolidation. C1 and L5.4 overlap; do C1 first.
+7. **L7, L8, L11, C4, L10** — deps/config/test hygiene + the L10 README note (docs-only).
+8. **L4** — persist maintenance mode. Reuses M5's atomic-write helper; do not duplicate it.
+9. **Docs + architecture accuracy audit** — independent top-to-bottom pass over README, DOCKERHUB.md,
+   ARCHITECTURE.md, CLAUDE.md and any diagrams, verified against the code as it stands after phase 8.
+   This is *on top of* each phase's own doc updates, not a substitute — it catches pre-existing drift
+   and anything that falls between phases.
+10. **Final plan.md prune** — remove completed detail, leave only what stays relevant.
+
+**Every phase must:** update the documentation its own change touches (README / DOCKERHUB.md /
+ARCHITECTURE.md / CLAUDE.md, wherever the change is user-visible or convention-changing — M1, L4, L10
+and C1 all have doc impact); keep `ruff check .` and `ruff format --check .` clean; keep the full
+pytest suite green; and update this file's Progress table + compress its finished findings to a
+one-line entry.
 
 ---
 

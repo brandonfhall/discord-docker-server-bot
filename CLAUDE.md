@@ -63,6 +63,7 @@ Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`, `DISCORD_GUILD_ID`) are set by
 2. Import it from `.config` wherever it's used — don't call `os.getenv()` in handler code.
 3. Document it in [.env.example](.env.example) and the env-var table in [README.md](README.md).
 4. If it's a secret, add it to the token list in `setup_logging()`.
+5. **Add it to the `environment:` passthrough list in BOTH [docker-compose.yml](docker-compose.yml) and [docker-compose.dev.yml](docker-compose.dev.yml).** Both files use bare `- VAR` env passthrough — a var missing from either list is silently unconfigurable in that deployment (no error, no warning, just the default). This step is easy to skip because nothing fails without it — do it every time, not just when something breaks.
 
 ## Test conventions
 

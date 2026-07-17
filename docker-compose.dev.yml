@@ -31,6 +31,15 @@ services:
       - CRASH_CHECK_INTERVAL
       - CRASH_ALERT_CHANNEL_ID
       - HISTORY_FILE
+      - PERMISSIONS_FILE
+      - LOG_FILE
+      - HEALTHCHECK_POLL_INTERVAL
+      - HEALTHCHECK_MAX_WAIT
+      # Without this passthrough, a dev who sets a real template (screen/rcon) in
+      # .env silently gets config.py's `echo "Message: {message}"` default, so
+      # !announce never exercises the /bin/sh -c template path it takes in prod --
+      # i.e. the one path local dev exists to test.
+      - CONTAINER_MESSAGE_CMD
     # No compose-level healthcheck override -- the image's own HEALTHCHECK (Dockerfile)
     # already expands ${STATUS_PORT:-8000} correctly and hits /healthz, so it stays
     # correct even if STATUS_PORT is customized here.
