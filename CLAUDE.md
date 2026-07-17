@@ -71,14 +71,14 @@ Tests live in [tests/](tests/) split by concern:
 
 | File | What it covers |
 |---|---|
-| `test_config.py` | `TestConfig`, `TestNewConfig`, `TestGuildLockRequired` |
+| `test_config.py` | `TestConfig`, `TestNewConfig`, `TestGuildLockRequired`, `TestPathAndLogLevelConfig` |
 | `test_docker_control.py` | `TestDockerControl`, `TestDockerControlLogs`, `TestDockerControlStats` |
 | `test_permissions.py` | `TestPermissions` |
 | `test_bot_commands.py` | `TestBotLogic`, `TestPendingOps`, `TestStopNow`, `TestRestartNow`, `TestLogsCommand`, `TestStatsCommand`, `TestMaintenanceMode`, `TestCancelCommand`, `TestHistoryCommand`, `TestCooldownError`, `TestGuideUpdated` |
 | `test_api.py` | `TestHealthzEndpoint`, `TestStatusEndpoint` |
 | `test_logging.py` | `TestRedactingFilter` |
 | `test_crash_alerting.py` | `TestCrashAlerting` |
-| `test_state.py` | `TestCancelPending`, `TestCommandHistory` |
+| `test_state.py` | `TestCancelPending`, `TestCommandHistory`, `TestMaintenancePersistence` |
 
 - Unit tests mock the Docker SDK; don't introduce tests that require a real Docker daemon.
 - Use `conftest.py` fixtures (`_reset_state`, `_reset_permissions_cache`) — they already run automatically.
