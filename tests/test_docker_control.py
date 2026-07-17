@@ -42,6 +42,18 @@ class TestDockerControl(unittest.TestCase):
         result = docker_control._sanitize("a" * 200)
         self.assertEqual(len(result), 100)
 
+    def test_sanitize_leading_space_does_not_shield_hyphen(self):
+        # L1: a leading space must not let a leading hyphen survive the
+        # flag-injection guard once the surrounding whitespace is stripped.
+        self.assertEqual(docker_control._sanitize(" -n hello"), "n hello")
+        self.assertEqual(docker_control._sanitize("- x"), "x")
+
+    def test_sanitize_normal_messages_unaffected(self):
+        # L1 regression: the reorder must not change output for ordinary
+        # messages, including ones with an in-word (non-leading) hyphen.
+        self.assertEqual(docker_control._sanitize("hello world"), "hello world")
+        self.assertEqual(docker_control._sanitize("foo-bar"), "foo-bar")
+
     # --- _find_container_by_name ---
 
     def test_find_container_not_found_returns_none(self):
@@ -351,6 +363,41 @@ class TestDockerControl(unittest.TestCase):
             result = docker_control.announce_in_game("my_game_server", "Hello")
         self.assertFalse(result.success)
         self.assertTrue(result.message.startswith("error (1):"))
+
+    @patch("src.docker_control.docker.from_env")
+    def test_announce_in_game_empty_after_sanitize_is_rejected(self, mock_from_env):
+        """L2: a message that sanitizes to "" (e.g. all emoji/quotes) must be
+        rejected before exec_run runs -- otherwise an empty in-game `say` is
+        executed and reported as success."""
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.containers.get.return_value = mock_container
+
+        with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
+            result = docker_control.announce_in_game("my_game_server", "$$$")
+        self.assertFalse(result.success)
+        self.assertIn("empty", result.message)
+        mock_container.exec_run.assert_not_called()
+
+    @patch("src.docker_control.docker.from_env")
+    def test_announce_in_game_non_utf8_output_does_not_raise(self, mock_from_env):
+        """L3: non-UTF-8 exec output must not turn a successful announce into
+        a failure via UnicodeDecodeError -- decode with errors="replace",
+        matching container_logs."""
+        mock_client = MagicMock()
+        mock_container = MagicMock()
+        mock_from_env.return_value = mock_client
+        mock_client.containers.get.return_value = mock_container
+
+        mock_exec = MagicMock()
+        mock_exec.exit_code = 0
+        mock_exec.output = b"\xff"
+        mock_container.exec_run.return_value = mock_exec
+
+        with patch("src.docker_control.ALLOWED_CONTAINERS", ["my_game_server"]):
+            result = docker_control.announce_in_game("my_game_server", "Hello")
+        self.assertTrue(result.success)
 
 
 class TestDockerControlLogs(unittest.TestCase):

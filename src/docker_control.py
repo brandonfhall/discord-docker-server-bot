@@ -239,9 +239,13 @@ def _sanitize(msg: str) -> str:
     s = msg[:100]
     # 2. Whitelist only safe characters — removes all shell metacharacters/quotes
     s = _VALID_MSG_CHARS.sub("", s)
-    # 3. Strip leading hyphens to prevent argument injection (e.g. --help, -n)
-    s = s.lstrip("-")
-    return s.strip()
+    # 3. Strip surrounding whitespace first so a leading space can't shield a
+    #    hyphen from lstrip (e.g. " -n hello" -> "-n hello" if stripped after),
+    #    then strip leading hyphens to prevent argument injection (e.g. --help,
+    #    -n), then strip again for any whitespace the hyphen-strip exposed
+    #    (e.g. "- foo" -> " foo" -> "foo").
+    s = s.strip().lstrip("-").strip()
+    return s
 
 
 def announce_in_game(name: str, message: str) -> Result:
@@ -259,6 +263,8 @@ def announce_in_game(name: str, message: str) -> Result:
         return Result(False, f"docker daemon error: {type(e).__name__}")
 
     safe_msg = _sanitize(message)
+    if not safe_msg:
+        return Result(False, "message is empty after sanitization")
     if "{message}" in CONTAINER_MESSAGE_CMD:
         # Use a literal substring replace, not str.format(): a template with any
         # other brace (e.g. Minecraft's `tellraw @a {"text":"{message}"}`) would
@@ -270,7 +276,7 @@ def announce_in_game(name: str, message: str) -> Result:
 
     try:
         res = c.exec_run(cmd)
-        out = res.output.decode("utf-8").strip()
+        out = res.output.decode("utf-8", errors="replace").strip()
         if res.exit_code != 0:
             return Result(False, f"error ({res.exit_code}): {out}")
         return Result(True, f"ok: {out}" if out else "ok")

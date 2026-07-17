@@ -16,8 +16,8 @@ a one-line entry here — only residual notes (deviations, decisions, gotchas) a
 | 2 | M2 → M4 → M3 — Docker error paths | ✅ done — `18a3798` |
 | 3 | M5 — atomic writes | ✅ done — `5a5e2a0` |
 | 4 | M6 — event-loop I/O + L12 | ✅ done — `f5550a0` |
-| 5 | L1, L2, L3 — docker_control | ☐ **next** |
-| 6 | L5, L6, C1, C2, C3 — bot.py UX + consolidation | ☐ not started |
+| 5 | L1, L2, L3 — docker_control | ✅ done — `9dea118` |
+| 6 | L5, L6, C1, C2, C3 — bot.py UX + consolidation | ☐ **next** |
 | 7 | L7, L8, L11, C4, L10 — deps/config/test/docs hygiene | ☐ not started |
 | 8 | L4 — persist maintenance mode | ☐ not started |
 | 9 | Docs + architecture accuracy audit | ☐ not started |
@@ -220,35 +220,16 @@ can no longer silently kill every privileged command.
 
 ## LOW (batch these; grouped by file)
 
-### L1 — `_sanitize` order-of-operations lets a leading hyphen survive (defense-in-depth gap, not currently reachable)
+### L1 / L2 / L3 — docker_control announce hardening — ✅ DONE (Phase 5, `9dea118`)
 
-**Location:** [src/docker_control.py](src/docker_control.py):178–187.
+L1 `_sanitize` reordered to `strip().lstrip("-").strip()` (a leading space no longer shields a hyphen);
+L2 empty-after-sanitize now returns a failure Result before running the template; L3 exec output
+decodes with `errors="replace"`. 224 tests (+4).
 
-A message like `" -n hello"` (leading space) passes the whitelist, `lstrip("-")` is a no-op (the
-string starts with a space), then the final `.strip()` removes the space — output `"-n hello"`,
-defeating the flag-injection guard the lstrip exists for. discord.py's argument parsing strips
-leading whitespace, so no current Discord input reaches this — but the function must be safe
-standalone (house rule: validation lives at the docker_control layer, not the caller).
-**Fix:** `s = s.strip().lstrip("-").strip()` (the final strip handles `"- foo"` → `"foo"`).
-**Test:** `test_docker_control.py`: `_sanitize(" -n hello") == "n hello"`; `_sanitize("- x") == "x"`.
-
-### L2 — `announce_in_game` executes the template even when the message sanitizes to empty
-
-**Location:** [src/docker_control.py](src/docker_control.py):198–206.
-
-A message of only non-whitelisted characters (all emoji/quotes) becomes `""` and the command still
-runs — an in-game `say` with empty text, reported as success.
-**Fix:** after `_sanitize`: `if not safe_msg: return Result(False, "message is empty after sanitization")`.
-**Test:** announce with `"$$$"` → failure `Result`, `exec_run` not called.
-
-### L3 — `res.output.decode("utf-8")` in `announce_in_game` can throw on non-UTF-8 exec output
-
-**Location:** [src/docker_control.py](src/docker_control.py):210.
-
-A game console emitting latin-1/binary turns a successful announce into
-`Result(False, "error: 'utf-8' codec…")`.
-**Fix:** `decode("utf-8", errors="replace")` — matching `container_logs` at line 138.
-**Test:** mock `exec_run` output `b"\xff"` with `exit_code=0` → success `Result`.
+**Residual note:** `lstrip("-")` strips only the *leading* run of hyphens — an interior token like
+`-rf -x` → `rf -x` keeps the interior `-x`. Safe here: no-placeholder path passes `safe_msg` as a
+single argv element (not re-split), and the `/bin/sh -c` path embeds it as literal text. Don't assume
+"all hyphens neutralized" if this sanitizer is ever reused for a differently-parsed sink.
 
 ### L4 — Maintenance mode does not survive a bot restart *(DECIDED: persist — Phase 8)*
 
