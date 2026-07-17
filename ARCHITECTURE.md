@@ -30,6 +30,7 @@ src/
   docker_control.py  — Docker SDK wrappers; container-name allowlist + message sanitizer
   permissions.py     — JSON-backed role permission store with mtime cache
   history.py         — Thread-safe append-only command history/audit log
+  atomic_io.py       — Atomic, fsync'd JSON write helper shared by permissions.py and history.py
   logging_config.py  — Root logger setup + RedactingFilter
   state.py           — BotState singleton (pending_ops, pending_op_info, maintenance flags, last_known_status)
 
@@ -101,7 +102,8 @@ A single lazily-constructed `_docker_client` is reused for the lifetime of the p
 - Backed by a JSON file at `PERMISSIONS_FILE` (default `data/permissions.json`).
 - Created on first run with defaults from `DEFAULT_ALLOWED_ROLES`; permission bits are 0o600 on initial create.
 - New actions added to `ALL_ACTIONS` are auto-backfilled into existing files — upgrades don't need manual JSON edits.
-- A corrupted JSON file is removed and re-initialized from defaults rather than crashing the bot.
+- Writes (`_save`) go through `atomic_io.atomic_write_json()`: JSON is written to a temp file in the same directory, `fsync`'d, `chmod`'d to `0o600`, then moved into place with `os.replace` — a crash mid-write can never leave a truncated `permissions.json`, and the 0o600 mode survives every write, not just the initial create. The in-memory `_cache`/`_cache_mtime` are only updated after the replace succeeds, so a failed write can't leave the cache claiming data that isn't on disk.
+- A corrupted JSON file is **not** deleted: `_load()` renames it to `permissions.json.corrupt` (via `os.replace`) and logs at ERROR, then re-initializes the live file from defaults. The bot keeps running on defaults either way — only the destruction of evidence changed. An operator who finds the bot back on defaults can inspect the `.corrupt` sibling to recover any custom role grants.
 - Cache in `_load()` uses the file's `mtime` as a coherence key — cheap lookups when the file hasn't changed.
 
 ### Maintenance mode

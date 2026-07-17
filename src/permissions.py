@@ -3,6 +3,7 @@ import logging
 import os
 from typing import Dict, List
 
+from .atomic_io import atomic_write_json
 from .config import PERMISSIONS_FILE, DEFAULT_ALLOWED_ROLES
 
 # Actions that should always have an entry in the permissions file.
@@ -58,11 +59,14 @@ def _load() -> Dict[str, List[str]]:
         with open(PERMISSIONS_FILE, "r") as f:
             data = json.load(f)
     except json.JSONDecodeError:
-        logging.error(f"Permissions file {PERMISSIONS_FILE} is corrupted. Re-initializing with defaults.")
+        corrupt_path = PERMISSIONS_FILE + ".corrupt"
+        logging.error(
+            f"Permissions file {PERMISSIONS_FILE} is corrupted. Restoring defaults; original preserved at {corrupt_path}."
+        )
         try:
-            os.remove(PERMISSIONS_FILE)
+            os.replace(PERMISSIONS_FILE, corrupt_path)
         except OSError as e:
-            logging.warning(f"Could not remove corrupted permissions file: {e}")
+            logging.warning(f"Could not preserve corrupted permissions file: {e}")
         _ensure_file()
         with open(PERMISSIONS_FILE, "r") as f:
             data = json.load(f)
@@ -82,8 +86,9 @@ def _load() -> Dict[str, List[str]]:
 
 def _save(data: Dict[str, List[str]]):
     global _cache, _cache_mtime
-    with open(PERMISSIONS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+    atomic_write_json(PERMISSIONS_FILE, data, indent=2, mode=0o600)
+    # Only update the cache once the write is durably on disk — if
+    # atomic_write_json raised, we must not claim data that isn't there.
     _cache = data
     try:
         _cache_mtime = os.path.getmtime(PERMISSIONS_FILE)

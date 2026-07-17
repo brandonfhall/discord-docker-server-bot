@@ -14,8 +14,8 @@ a one-line entry here — only residual notes (deviations, decisions, gotchas) a
 |---|---|---|
 | 1 | M1 — compose env passthrough | ✅ done — `fb26b5d` (+ `2ff36ed` DOCKERHUB) |
 | 2 | M2 → M4 → M3 — Docker error paths | ✅ done — `18a3798` |
-| 3 | M5 — atomic writes | ☐ **next** |
-| 4 | M6 — event-loop I/O | ☐ not started |
+| 3 | M5 — atomic writes | ✅ done — `5a5e2a0` |
+| 4 | M6 — event-loop I/O (+ L12) | ☐ **next** |
 | 5 | L1, L2, L3 — docker_control | ☐ not started |
 | 6 | L5, L6, C1, C2, C3 — bot.py UX + consolidation | ☐ not started |
 | 7 | L7, L8, L11, C4, L10 — deps/config/test/docs hygiene | ☐ not started |
@@ -131,32 +131,54 @@ into a no-reply; removal fires a crash alert; the health watcher exits on a `Non
   Phase 6.
 
 
-### M5 — Permissions/history writes are non-atomic, and the permissions corruption-recovery path silently destroys all custom role grants
+### M5 — Non-atomic writes + destructive corruption recovery — ✅ DONE (Phase 3, `5a5e2a0`)
 
-**Location:** [src/permissions.py](src/permissions.py):83–91 (`_save`), 57–68 (corruption recovery in `_load`); [src/history.py](src/history.py):23–30 (`save`).
+Both writers go through the new `src/atomic_io.py` (`atomic_write_json`): temp file in the same dir →
+`json.dump` → `flush` → `fsync` → `os.replace`, temp cleaned up on failure. Permissions keep 0o600 via
+explicit `chmod` before the replace. Corrupt files are renamed to `<path>.corrupt`, not deleted.
+219 tests (+4). ARCHITECTURE.md updated (Permissions section + directory layout).
 
-**Problem:** both files are written with plain `open(path, "w")` + `json.dump`. A crash, OOM-kill, or
-host power loss mid-write leaves a truncated file. For history this quietly loses the audit log
-(`load` returns `[]`). For permissions it's worse: the next `_load` hits `JSONDecodeError`, **deletes
-the file**, and re-initializes from `DEFAULT_ALLOWED_ROLES` — every `!perm add` ever made is gone,
-with only a log line to show for it. Since permissions gate container control, a truncation event
-silently *changes who can do what*.
+**Residual notes worth keeping:**
+- **New module `src/atomic_io.py`, deliberately against the "edit existing files" house rule.**
+  Rationale (agreed on review): `history.py` has zero project-internal imports; `config.py` has
+  import-time side effects (`load_dotenv()`, fail-fast validation) that must not leak into the audit
+  log; `state.py` is the BotState singleton, not I/O infra; and `permissions.py` ↔ `history.py`
+  importing each other would couple the permission store to the audit log. Stdlib-only leaf module.
+  **Phase 8 must reuse this for the maintenance-state file — do not write a fourth JSON writer.**
+- **Behavior change:** `history.json` narrows from umask-default (~0o644) to 0o600 (`mkstemp` default;
+  history passes no explicit `mode`). Same-user reader and the log holds Discord usernames, so this is
+  a tightening. Noted so it isn't rediscovered as a mystery later.
+- **A second corruption silently overwrites the first `.corrupt`** (verified). Accepted: the most
+  recent corruption is the useful evidence. If forensic history ever matters, timestamp the suffix.
+- **No directory fsync after `os.replace`.** Accepted, and the distinction matters: `os.replace` is
+  atomic, so a reader can never observe a torn file — M5's actual goal. Without a dir fsync, a power
+  loss can revert to the *previous intact* file. Losing the last `!perm add` is recoverable; a corrupt
+  permission store is not. Don't "fix" this without a reason.
 
-**Fix:**
-1. In both `_save` (permissions) and `save` (history): write to a temp file in the same directory,
-   `json.dump` + `f.flush()` + `os.fsync(f.fileno())`, then `os.replace(tmp, path)` — atomic on POSIX.
-   Preserve the 0o600 mode on the permissions file (`os.chmod` the temp file before replace; the
-   initial-create opener at [src/permissions.py](src/permissions.py):37 handles first creation only).
-2. In the corruption path in `_load`, **rename** the corrupted file to `PERMISSIONS_FILE + ".corrupt"`
-   (via `os.replace`) instead of `os.remove`, and log at ERROR that defaults were restored and the
-   original preserved. Recovery behavior (bot keeps running on defaults) stays the same — only the
-   destruction of evidence changes.
-3. Keep the cache coherent: `_save` currently updates `_cache`/`_cache_mtime` in step — update them
-   after the `os.replace` succeeds.
+---
 
-**Test:** in `tests/test_permissions.py`: write garbage to the permissions file, call `_load`, assert
-a `.corrupt` sibling now holds the garbage and the live file has defaults. For atomicity, at minimum
-patch-and-assert `os.replace` is used by `_save` rather than in-place truncation.
+### L12 — A failed `os.replace` in permissions' corruption path makes `_load` raise, silently killing every privileged command *(found during Phase 3 review; pre-existing, not a Phase 3 regression)*
+
+**Location:** [src/permissions.py](src/permissions.py) `_load`'s `except json.JSONDecodeError` branch.
+
+If preserving the corrupt file fails (read-only or permission-broken `data/` dir), the branch logs a
+warning and calls `_ensure_file()` — which no-ops, because the corrupt file still exists — then
+re-reads it and raises `JSONDecodeError` uncaught. That escapes `is_member_allowed` → the
+`has_permission` predicate → `on_command_error`'s logging-only `else`, so **the user gets no reply at
+all** and every privileged command silently dies. Same failure shape M2 just fixed for Docker errors.
+
+**Verified pre-existing:** the old `os.remove` version raises identically (tested at `18a3798` by
+patching `os.remove` to fail). Phase 3 changed the call, not the shape. Rare — needs a broken data
+dir — but the consequence is total, silent loss of privileged commands.
+
+**Fix:** make the recovery path tolerate a failed preserve. After the `os.replace` attempt, if the
+file still parses as garbage, fall back to in-memory defaults (`dict(DEFAULT_ALLOWED_ROLES)` per
+action) and log at ERROR rather than re-reading and raising. The bot must degrade to defaults, never
+to "no privileged commands work and nothing says why".
+**Test:** patch `os.replace` to raise `OSError` in `_load`'s corruption path → assert `_load` returns
+defaults and does not raise.
+**Sequencing:** fold into **Phase 4** (M6 touches this exact call path) or Phase 7. Not urgent, but
+don't lose it.
 
 ---
 

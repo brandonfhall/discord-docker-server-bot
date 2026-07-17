@@ -1,6 +1,6 @@
 import os
 import unittest
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from src.state import state
 
@@ -54,6 +54,18 @@ class TestCommandHistory(unittest.TestCase):
     def tearDown(self):
         if os.path.exists(self.test_file):
             os.remove(self.test_file)
+        directory = os.path.dirname(self.test_file) or "."
+        prefix = os.path.basename(self.test_file) + "."
+        for name in os.listdir(directory):
+            if name.startswith(prefix) and name.endswith(".tmp"):
+                os.remove(os.path.join(directory, name))
+
+    def test_save_uses_atomic_replace_not_in_place_truncation(self):
+        """history.save must go through os.replace (atomic rename) rather
+        than truncating the live file in place."""
+        with patch("src.atomic_io.os.replace") as mock_replace:
+            self.history.save(self.test_file, [{"user": "X", "command": "start"}])
+            mock_replace.assert_called_once()
 
     def test_record_and_load_history(self):
         self.history.record(self.test_file, "TestUser", "start", "server1")
