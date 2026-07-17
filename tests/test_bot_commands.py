@@ -1530,7 +1530,11 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
         ctx.author.guild_permissions.administrator = False
 
         # L7: the pre-flight status check must see "running" to proceed.
+        # M6: is_member_allowed now also flows through run_blocking (dispatched
+        # here by identity, since it's itself a MagicMock with no __name__).
         async def mock_run_blocking(func, *args, **kwargs):
+            if func is mock_perm:
+                return func(*args, **kwargs)
             if func.__name__ == "container_status":
                 return "running"
             return docker_control.Result(True, "stopped")

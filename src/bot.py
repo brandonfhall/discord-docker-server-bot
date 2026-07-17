@@ -82,7 +82,7 @@ def has_permission(action: str):
     async def predicate(ctx):
         if ctx.author.guild_permissions.administrator:
             return True
-        allowed = permissions.is_member_allowed(action, ctx.author)
+        allowed = await docker_control.run_blocking(permissions.is_member_allowed, action, ctx.author)
         return allowed
 
     return commands.check(predicate)
@@ -395,7 +395,9 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
         return False
 
     if now:
-        if not ctx.author.guild_permissions.administrator and not permissions.is_member_allowed(now_action, ctx.author):
+        if not ctx.author.guild_permissions.administrator and not await docker_control.run_blocking(
+            permissions.is_member_allowed, now_action, ctx.author
+        ):
             await ctx.send(f"You do not have permission to use `!{action} now`.")
             return
         logging.info(f"User {ctx.author} requested immediate {action.upper()} for container '{target}'")
@@ -719,7 +721,7 @@ async def history_cmd(ctx, count: int = 10):
     """View recent command history. Usage: !history [count]"""
     logging.info(f"User {ctx.author} requested HISTORY")
     count = max(1, min(count, 25))
-    entries = history.load(HISTORY_FILE)
+    entries = await docker_control.run_blocking(history.load, HISTORY_FILE)
     if not entries:
         await ctx.send("No command history recorded yet.")
         return
@@ -792,7 +794,7 @@ async def perm_add(ctx, action: str, *, role_name: str):
     if action not in VALID_ACTIONS:
         await ctx.send(f"Unknown action `{action}`. Valid actions: {', '.join(sorted(VALID_ACTIONS))}")
         return
-    permissions.add_role(action, role_name)
+    await docker_control.run_blocking(permissions.add_role, action, role_name)
     logging.info(f"User {ctx.author} ADDED role '{role_name}' to action '{action}'")
     await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, f"perm add {action} {role_name}", "")
     await ctx.send(f"Added role {role_name} to {action}")
@@ -804,7 +806,7 @@ async def perm_remove(ctx, action: str, *, role_name: str):
     if action not in VALID_ACTIONS:
         await ctx.send(f"Unknown action `{action}`. Valid actions: {', '.join(sorted(VALID_ACTIONS))}")
         return
-    permissions.remove_role(action, role_name)
+    await docker_control.run_blocking(permissions.remove_role, action, role_name)
     logging.info(f"User {ctx.author} REMOVED role '{role_name}' from action '{action}'")
     await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, f"perm remove {action} {role_name}", "")
     await ctx.send(f"Removed role {role_name} from {action}")
@@ -814,7 +816,7 @@ async def perm_remove(ctx, action: str, *, role_name: str):
 async def perm_list(ctx):
     """Lists all permissions."""
     logging.info(f"User {ctx.author} requested PERM LIST")
-    data = permissions.list_permissions()
+    data = await docker_control.run_blocking(permissions.list_permissions)
     lines = [f"{k}: {', '.join(v)}" for k, v in data.items()]
     await ctx.send("\n".join(lines))
 

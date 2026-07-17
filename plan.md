@@ -15,8 +15,8 @@ a one-line entry here — only residual notes (deviations, decisions, gotchas) a
 | 1 | M1 — compose env passthrough | ✅ done — `fb26b5d` (+ `2ff36ed` DOCKERHUB) |
 | 2 | M2 → M4 → M3 — Docker error paths | ✅ done — `18a3798` |
 | 3 | M5 — atomic writes | ✅ done — `5a5e2a0` |
-| 4 | M6 — event-loop I/O (+ L12) | ☐ **next** |
-| 5 | L1, L2, L3 — docker_control | ☐ not started |
+| 4 | M6 — event-loop I/O + L12 | ✅ done — `f5550a0` |
+| 5 | L1, L2, L3 — docker_control | ☐ **next** |
 | 6 | L5, L6, C1, C2, C3 — bot.py UX + consolidation | ☐ not started |
 | 7 | L7, L8, L11, C4, L10 — deps/config/test/docs hygiene | ☐ not started |
 | 8 | L4 — persist maintenance mode | ☐ not started |
@@ -182,29 +182,41 @@ don't lose it.
 
 ---
 
-### M6 — Remaining synchronous file I/O on the event loop: `history.load`, all three `!perm` handlers, and every `has_permission` check
+### M6 — sync file I/O on the event loop — ✅ DONE (Phase 4, `f5550a0`)
 
-**Location:** [src/bot.py](src/bot.py):85 (`permissions.is_member_allowed` inside the `has_permission` predicate), 363 (same, the `now`-path check), 680 (`history.load` in `history_cmd`), 753 (`permissions.add_role`), 765 (`permissions.remove_role`), 775 (`permissions.list_permissions`).
+All six call sites now go through `run_blocking()`. The permissions module stays synchronous by
+design — `api.py` calls `list_permissions()` from the uvicorn thread. 220 tests (+1 from L12).
 
-**Problem:** cycle 1 moved `history.record` behind `run_blocking()` and CLAUDE.md now states the rule
-("the same applies to other blocking calls made from handlers"), but these six call sites still do
-disk I/O directly on the event loop. The permission predicate runs on **every privileged command**: a
-`stat()` per command always, plus a full file read + JSON parse whenever the mtime changed. On a
-slow/contended volume this stalls the event loop (heartbeats, all other handlers). `history.load`
-reads and parses up to 200 entries inline.
-
-**Fix:** wrap each in `await docker_control.run_blocking(...)`. The `has_permission` predicate is
-already `async`, so
-`allowed = await docker_control.run_blocking(permissions.is_member_allowed, action, ctx.author)`
-is a drop-in; same shape for the other five. Do **not** make the permissions module itself async —
-sync-and-wrapped matches the existing pattern and its use from the API thread.
-**Caution:** this adds awaits inside `_delayed_container_op`'s `now` path only — the non-`now` dedup
-region is untouched, but re-read the invariant note in "What's already solid" below before editing.
-
-**Test:** existing handler tests exercise these paths and should pass unchanged — that is the
-acceptance criterion (no behavior change). Spot-check one test per touched handler.
+**Residual notes worth keeping:**
+- **Dedup invariant verified intact** post-change: no `await` between `has_pending_op` (bot.py:422)
+  and the placeholder insertion (bot.py:431). The `now`-path edit is inside `if now:`, which returns
+  before that region. **Phase 6 (C1/C2) touches this function — re-verify.**
+- **One existing test's `run_blocking` double needed updating** (`test_stop_now_allowed_with_role`):
+  it dispatches on `func.__name__`, and `is_member_allowed` — now routed through `run_blocking` — is a
+  `MagicMock` with no `__name__`. Both assertions unchanged verbatim; mock plumbing, not behavior.
+  **Watch for this pattern in later phases:** any test faking `run_blocking` with a `__name__`
+  dispatcher will break the moment a new call is routed through it. That's the double being wrong,
+  not the code — fix the double, never the assertion.
 
 ---
+
+### L12 — `_load` raised on corrupt perms when preserve failed — ✅ DONE (Phase 4, `f5550a0`)
+
+`_load()` now degrades to in-memory defaults + ERROR log instead of raising, so a broken `data/` dir
+can no longer silently kill every privileged command.
+
+**Residual notes worth keeping:**
+- **The fallback is deliberately uncached.** The disk file is still corrupt, so each call retries the
+  preserve-and-reload and the bot self-heals the moment the filesystem clears — no restart needed.
+  Verified empirically. Cost: repeated ERROR logs + a retried `os.replace` per privileged command while
+  broken. Accepted (rare, operator-visible, and off the event loop thanks to M6).
+- **⚠️ Security nuance, accepted but worth knowing:** the fallback returns `DEFAULT_ALLOWED_ROLES` for
+  *every* action. If an operator had deliberately *tightened* permissions (e.g. `!perm remove` of a
+  role from `stop`), a disk failure silently *restores* that role's access until the disk is fixed.
+  This fails toward the operator's configured baseline, not toward "everyone" — and it's logged at
+  ERROR — so it was judged the right trade against locking admins out mid-incident. If this ever needs
+  to fail closed instead, that's a deliberate policy change, not a bug fix.
+
 
 ## LOW (batch these; grouped by file)
 

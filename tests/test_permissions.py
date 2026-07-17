@@ -72,6 +72,25 @@ class TestPermissions(unittest.TestCase):
             on_disk = json.load(f)
         self.assertEqual(on_disk, data)
 
+    def test_load_falls_back_to_defaults_when_preserve_fails(self):
+        """If os.replace (the corrupt-file preserve step) itself fails -- e.g. a
+        read-only/permission-broken data dir -- _load must degrade to in-memory
+        defaults rather than let JSONDecodeError escape (L12)."""
+        garbage = "not valid json {{{ this is garbage"
+        with open(self.test_file, "w") as f:
+            f.write(garbage)
+
+        with patch("src.permissions.os.replace", side_effect=OSError("read-only filesystem")):
+            data = permissions._load()
+
+        self.assertIsInstance(data, dict)
+        self.assertIn("start", data)
+        self.assertEqual(set(data.keys()), set(permissions.ALL_ACTIONS))
+        # The on-disk file is untouched -- still the original garbage -- since
+        # the preserve/reinit never actually succeeded.
+        with open(self.test_file, "r") as f:
+            self.assertEqual(f.read(), garbage)
+
     def test_save_uses_atomic_replace_not_in_place_truncation(self):
         """_save must go through os.replace (atomic rename) rather than
         truncating the live file in place."""
