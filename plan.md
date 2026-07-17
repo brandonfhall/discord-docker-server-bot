@@ -12,13 +12,13 @@ a one-line entry here — only residual notes (deviations, decisions, gotchas) a
 
 | Phase | Findings | Status |
 |---|---|---|
-| 1 | M1 — compose env passthrough | ✅ done — `b64a986` |
-| 2 | M2 → M4 → M3 — Docker error paths | ☐ **next** |
-| 3 | M5 — atomic writes | ☐ not started |
+| 1 | M1 — compose env passthrough | ✅ done — `fb26b5d` (+ `2ff36ed` DOCKERHUB) |
+| 2 | M2 → M4 → M3 — Docker error paths | ✅ done — `18a3798` |
+| 3 | M5 — atomic writes | ☐ **next** |
 | 4 | M6 — event-loop I/O | ☐ not started |
 | 5 | L1, L2, L3 — docker_control | ☐ not started |
 | 6 | L5, L6, C1, C2, C3 — bot.py UX + consolidation | ☐ not started |
-| 7 | L7, L8, C4 — deps/config/test hygiene | ☐ not started |
+| 7 | L7, L8, L11, C4, L10 — deps/config/test/docs hygiene | ☐ not started |
 | 8 | L4 — persist maintenance mode | ☐ not started |
 | 9 | Docs + architecture accuracy audit | ☐ not started |
 | 10 | Final plan.md prune | ☐ not started |
@@ -44,7 +44,7 @@ fix, and tests to add. Implementers should not need to re-investigate. Line numb
 commit `74f0ac2`.
 
 **Baseline at review time (verify before starting, re-verify after every finding):**
-- `PYTHONPATH=. pytest -q tests/` → **205 passed** (1 pre-existing `audioop` DeprecationWarning from discord.py — not ours)
+- `PYTHONPATH=. pytest -q tests/` → **215 passed** as of Phase 2 (was 205 at review time; 1 pre-existing `audioop` DeprecationWarning from discord.py — not ours)
 - `ruff check .` → clean · `ruff format --check .` → clean
 - House rules in [CLAUDE.md](CLAUDE.md) apply to every fix: Docker/blocking calls via `run_blocking()`,
   state in `state.py`, `Result` NamedTuple, tests per the conventions table, README + DOCKERHUB.md
@@ -64,7 +64,7 @@ here is architectural; module boundaries are sound and should not be reorganized
 
 ## MEDIUM
 
-### M1 — compose env passthrough gaps — ✅ DONE (Phase 1, `b64a986`)
+### M1 — compose env passthrough gaps — ✅ DONE (Phase 1, `fb26b5d`)
 
 Both compose files now pass all 21 vars `config.py` reads; CLAUDE.md's "Adding a new env var"
 checklist gained the compose-passthrough step as the regression guard.
@@ -84,7 +84,7 @@ checklist gained the compose-passthrough step as the regression guard.
     echo "MISSING from $f:"; comm -23 /tmp/cfg.txt /tmp/have.txt
   done
   ```
-  Both lists came back empty at `b64a986`. **Phase 9 should re-run this** after all code phases land.
+  Both lists came back empty at `fb26b5d`. **Phase 9 should re-run this** after all code phases land.
 - **No automated test was added.** The optional pytest guard (assert every config.py var appears in
   both compose lists) was considered and skipped — the CLAUDE.md checklist plus the snippet above are
   the guard. If this drifts a *second* time, promote it to a real test; a third occurrence means the
@@ -93,88 +93,43 @@ checklist gained the compose-passthrough step as the regression guard.
 
 ---
 
-### M2 — A down/unreachable Docker daemon is reported to users as "container not found"; unexpected `APIError`s from start/stop/restart reach the user as *nothing at all*
+### M2 / M4 / M3 — Docker error paths — ✅ DONE (Phase 2, `18a3798`)
 
-**Location:** [src/docker_control.py](src/docker_control.py):45–52 (`_find_container_by_name`), 63–99 (`start_container`/`stop_container`/`restart_container`).
+Daemon-down now reports honestly instead of "container not found"; `APIError` can no longer escape
+into a no-reply; removal fires a crash alert; the health watcher exits on a `None` read. 215 tests
+(+10), ARCHITECTURE.md updated ("Docker operations" + "Crash detection loop").
 
-**Problem (two related halves):**
-1. `_find_container_by_name` catches **all** exceptions — including `docker.errors.DockerException` /
-   connection errors when the socket is unreachable — logs a warning, and returns `None`. Every caller
-   then reports `"container {name} not found"`. During an actual daemon outage (socket permission
-   regression, docker-socket-proxy down, dockerd restart) the operator is told the container doesn't
-   exist, which sends troubleshooting in exactly the wrong direction. Same effect in `crash_check_loop`
-   and `/status` (`"status": null` instead of any error indication).
-2. `c.start()` / `c.stop()` / `c.restart()` / `c.reload()` can raise `docker.errors.APIError` (e.g.
-   driver failure, OCI runtime error — reachable in normal operation, not "genuinely unexpected").
-   The exception propagates out of `run_blocking()` into the command handler; discord.py routes it to
-   `on_command_error`'s final `else` ([src/bot.py](src/bot.py):212–213), which only logs. The user who
-   typed `!start` gets **no reply at all** — the bot appears to hang.
+**Residual notes worth keeping:**
+- **⚠️ THE PLAN WAS WRONG HERE — carry this forward.** M2 as written said to catch
+  `docker.errors.DockerException`. That is insufficient. `_get_client()` caches the client for the
+  process lifetime, so the real failure is a daemon that dies *mid-life* — which raises
+  `requests.exceptions.ConnectionError`, **not** a `DockerException` subclass. `DockerException` only
+  surfaces at client *construction* (which this code does once, at startup). Verified empirically
+  against `docker==7.2.0`. Catching only `DockerException` would have left the bug live in production
+  while mocked tests passed green. Both are caught via `_DAEMON_CONNECTION_ERRORS` in
+  [src/docker_control.py](src/docker_control.py); `test_container_status_requests_connection_error_returns_error_string`
+  pins the real path. **Any future code catching docker errors must use that tuple, not
+  `DockerException` alone.**
+- **`APIError` subclasses BOTH `DockerException` and `RequestException`** (MRO: `APIError → HTTPError →
+  RequestException → OSError → DockerException`). So `except docker.errors.APIError` **must** precede
+  `except _DAEMON_CONNECTION_ERRORS` — it does in the `Result`-returning functions. The
+  `Optional`-returning ones have no separate `APIError` catch, so an API error there collapses into
+  `"error"`/`None`; acceptable given their "no data" contract, but know it's deliberate, not an oversight.
+- **`container_status` now has a third return value: the literal `"error"`.** Not `None`, not raising.
+  Consumers handling it: `crash_check_loop` + `_before_crash_check` (skip the iteration entirely),
+  `status_cmd` and `_bail_if_not_running` (explicit "daemon unreachable" reply), `api.py` `/status`
+  (passes through as an honest monitoring signal). **Any new `container_status` caller must handle
+  `"error"`** or it will render/compare it as if it were a real Docker state.
+- **The three crash-baseline re-seed sites (bot.py:289, 414, 470) are deliberately left unguarded.**
+  A stored `"error"` is self-correcting: `prev == "error"` never matches `prev == "running"`, so it
+  cannot fire a false alert, and it clears on the next poll. The only loss is a crash coinciding
+  exactly with a daemon blip at re-seed time — undetectable either way. Verified, not overlooked.
+  Note C2 will consolidate these three into one helper — preserve this property.
+- **Dedup invariant verified intact** post-change: no `await` between `has_pending_op` (bot.py:420)
+  and the placeholder insertion (bot.py:429).
+- **Known gap, deferred:** `!status` still renders `**None**` for a not-found container — that's L5.1,
+  Phase 6.
 
-**Fix:**
-1. In `_find_container_by_name`, keep `docker.errors.NotFound` → `None`, but stop swallowing daemon
-   errors: narrow the broad `except Exception` so `docker.errors.DockerException` (connection-level)
-   propagates. Then have each public `Result`-returning function wrap its body:
-   `except docker.errors.DockerException as e: return Result(False, f"docker daemon error: {type(e).__name__}")`
-   (don't leak socket paths/URLs into Discord). For the Optional-returning functions
-   (`container_status`/`container_health`/`container_logs`/`container_stats`), catch the daemon error,
-   log at ERROR, and return `None` — **except** `container_status`, where returning the literal string
-   `"error"` is recommended so `!status` and `/status` can display something honest instead of
-   "not found". If that distinction is adopted, update `!status` rendering and note it in
-   ARCHITECTURE.md's Docker-operations section.
-2. Wrap the mutating calls (`c.start()` etc.) in `try/except docker.errors.APIError` returning
-   `Result(False, f"docker error: {e.explanation or e}")` — this keeps the `Result` contract
-   ("raise only on genuinely unexpected errors") honest and guarantees the user always gets a reply.
-
-**Test:** in `tests/test_docker_control.py`: mock `client.containers.get` to raise
-`docker.errors.DockerException` and assert the `Result` failure mentions the daemon (not "not
-found"); mock `c.start` to raise `docker.errors.APIError("boom")` and assert `Result(False, ...)`
-rather than an exception escaping.
-
----
-
-### M3 — `_wait_for_healthy` spins for up to `HEALTHCHECK_MAX_WAIT` (default **30 minutes**) when the container stops or disappears mid-wait, then sends a wrong "still starting" message
-
-**Location:** [src/bot.py](src/bot.py):291–319, specifically the loop at 304–313.
-
-**Problem:** the loop only exits on `"healthy"` or `"unhealthy"`. `container_health()` returns `None`
-for not-found, disallowed, **or no health state** — and a container that was `!stop`ped (or crashed
-and was removed, or was recreated without a HEALTHCHECK) during the wait returns `None` forever. The
-task then silently polls every 5s for 30 minutes and finally tells the user
-``still `starting` after 1800s`` — false on both counts. With `HEALTHCHECK_MAX_WAIT=0` it polls
-forever, leaking one background task plus one threadpool round-trip every 5s per orphaned start.
-
-**Fix:** treat `None` mid-wait as terminal. `start()` only schedules the watcher when health was
-non-None, so `None` here means the container went away or was recreated: break and send something like
-``f"`{target}` no longer reports health status (it may have been stopped or recreated). Check `!status {target}`."``
-
-**Test:** in `tests/test_bot_commands.py`, drive `_wait_for_healthy` with mocked
-`docker_control.container_health` returning `"starting"` then `None`; assert prompt exit and the
-terminal message (patch `asyncio.sleep` or use a tiny poll interval, following existing async-mock
-patterns).
-
----
-
-### M4 — Crash alerting never fires when a running container is *removed* (status transitions `running → None`)
-
-**Location:** [src/bot.py](src/bot.py):225–228.
-
-**Problem:** the alert condition is `prev == "running" and current and current != "running"`. When a
-container is deleted while running (`docker rm -f`, a compose down of the game stack, a botched
-re-create), `container_status` returns `None`, `current` is falsy, and no alert fires — precisely the
-scenario crash alerting exists for. The baseline is then overwritten with `None`, so the event is
-permanently invisible.
-
-**Fix:** alert on `prev == "running" and current != "running"`, rendering `current or "removed/not found"`
-in the message. **Ordering dependency on M2:** implement M2 first and preserve the property that a
-daemon-level error *raises* out of `container_status` (so the `except Exception: continue` at
-bot.py:222–224 skips the poll) rather than returning `None` — otherwise a daemon blip would fire a
-false "removed" alert for every container. If M2's `"error"` string return is adopted for
-`container_status`, also exclude `current == "error"` from alerting.
-
-**Test:** in `tests/test_crash_alerting.py`: seed `state.last_known_status["x"] = "running"`, mock
-`container_status` → `None`, assert an alert is sent naming the container.
-
----
 
 ### M5 — Permissions/history writes are non-atomic, and the permissions corruption-recovery path silently destroys all custom role grants
 

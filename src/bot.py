@@ -215,24 +215,38 @@ async def on_command_error(ctx, error):
 
 @tasks.loop(seconds=CRASH_CHECK_INTERVAL)
 async def crash_check_loop():
-    """Polls container statuses and alerts if one unexpectedly stops."""
+    """Polls container statuses and alerts if one unexpectedly stops or is removed."""
     # state.last_known_status is populated here on first run
     for name in ALLOWED_CONTAINERS:
         try:
             current = await docker_control.run_blocking(docker_control.container_status, name)
         except Exception:
             continue
+        if current == "error":
+            # container_status() returns the literal "error" when the Docker
+            # daemon itself was unreachable for this poll (M2) -- that's a
+            # transient daemon blip, not a real state change. Skip updating the
+            # baseline and skip alerting: overwriting last_known_status here
+            # would either mask a real crash that happened during the outage,
+            # or -- if we alerted on it -- fire a false "removed" alert for
+            # every container on every daemon hiccup (M4's ordering note).
+            logging.warning(f"Skipping crash check for '{name}': docker daemon unreachable")
+            continue
         prev = state.last_known_status.get(name)
         state.last_known_status[name] = current
-        # Alert when a container transitions from running to non-running
-        if prev == "running" and current and current != "running":
-            logging.warning(f"Crash alert: container '{name}' changed from running to {current}")
+        # Alert when a container transitions from running to anything else,
+        # including removal -- container_status() returns None for a container
+        # that was force-removed while running (`docker rm -f`), which is
+        # exactly the scenario crash alerting exists to catch (M4).
+        if prev == "running" and current != "running":
+            status_desc = current or "removed/not found"
+            logging.warning(f"Crash alert: container '{name}' changed from running to {status_desc}")
             channel_id = CRASH_ALERT_CHANNEL_ID or ANNOUNCE_CHANNEL_ID
             if channel_id:
                 ch = bot.get_channel(channel_id)
                 if ch:
                     try:
-                        await ch.send(f"**Crash Alert:** Container `{name}` is now **{current}** (was running).")
+                        await ch.send(f"**Crash Alert:** Container `{name}` is now **{status_desc}** (was running).")
                     except Exception as e:
                         logging.error(f"Failed to send crash alert: {e}")
 
@@ -243,9 +257,11 @@ async def _before_crash_check():
     # Seed initial statuses so we don't false-alert on startup
     for name in ALLOWED_CONTAINERS:
         try:
-            state.last_known_status[name] = await docker_control.run_blocking(docker_control.container_status, name)
+            status = await docker_control.run_blocking(docker_control.container_status, name)
         except Exception:
-            pass
+            continue
+        if status != "error":
+            state.last_known_status[name] = status
 
 
 @bot.command()
@@ -311,6 +327,20 @@ async def _wait_for_healthy(ctx, target: str, success_message: str):
             if health == "unhealthy":
                 await ctx.send(f"`{target}` started but its healthcheck reports **unhealthy**. Check `!logs {target}`.")
                 return
+            if health is None:
+                # We only ever schedule this watcher when the initial health
+                # read was non-None (see start()), so a None here mid-wait
+                # means the container went away, was recreated without a
+                # HEALTHCHECK, or the daemon was briefly unreachable -- not
+                # "still starting". Treat it as terminal instead of spinning
+                # for the full HEALTHCHECK_MAX_WAIT (up to 30 min, or forever
+                # if HEALTHCHECK_MAX_WAIT == 0) and then reporting a status
+                # that was never true (M3).
+                await ctx.send(
+                    f"`{target}` no longer reports health status (it may have been stopped or recreated). "
+                    f"Check `!status {target}`."
+                )
+                return
         await ctx.send(
             f"`{target}` is still `starting` after {HEALTHCHECK_MAX_WAIT}s -- giving up watching. "
             f"Check `!status {target}` for the current state."
@@ -354,6 +384,11 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
         if action != "stop":
             return False
         current_status = await docker_control.run_blocking(docker_control.container_status, target)
+        if current_status == "error":
+            # Daemon unreachable (M2) -- don't tell the user the container
+            # isn't running when the truth is we couldn't check.
+            await ctx.send(f"Could not check status for `{target}` -- the Docker daemon is unreachable. Try again shortly.")
+            return True
         if current_status != "running":
             await ctx.send(f"Container `{target}` is not running.")
             return True
@@ -506,6 +541,13 @@ async def status_cmd(ctx, container_name: str = None):
         return
     logging.info(f"User {ctx.author} requested STATUS for container '{target}'")
     res = await docker_control.run_blocking(docker_control.container_status, target)
+    if res == "error":
+        # container_status() returns the literal "error" when the Docker daemon
+        # itself was unreachable (M2) -- tell the user that honestly instead of
+        # rendering "Status for `x`: **error**" with no explanation, or the old
+        # "not found" behavior a daemon outage used to produce.
+        await ctx.send(f"Could not check status for `{target}` -- the Docker daemon is unreachable. Try again shortly.")
+        return
     health = await docker_control.run_blocking(docker_control.container_health, target)
     lines = [f"Status for `{target}`: **{res}**"]
     if health:

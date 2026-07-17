@@ -370,6 +370,37 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         msg = ctx.send.call_args[0][0]
         self.assertIn("giving up", msg)
 
+    async def test_wait_for_healthy_exits_promptly_when_health_goes_none(self):
+        """M3: if the container stops/disappears mid-wait, container_health()
+        returns None. _wait_for_healthy must treat that as terminal on the very
+        next poll -- not spin for the full HEALTHCHECK_MAX_WAIT and then claim
+        it's "still starting" (which would be false on both counts)."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+
+        health_sequence = iter(["starting", None])
+
+        async def fake_run_blocking(func, *args, **kwargs):
+            if func is docker_control.container_health:
+                return next(health_sequence)
+            return None
+
+        with patch.object(bot_module, "HEALTHCHECK_POLL_INTERVAL", 0):
+            # A large max-wait proves the exit is triggered by the None health
+            # read, not by hitting the timeout.
+            with patch.object(bot_module, "HEALTHCHECK_MAX_WAIT", 1800):
+                with patch("src.bot.docker_control.run_blocking", new=fake_run_blocking):
+                    with patch("src.bot.asyncio.sleep", new=AsyncMock()):
+                        await bot_module._wait_for_healthy(ctx, "server1", "started")
+
+        ctx.send.assert_called_once()
+        msg = ctx.send.call_args[0][0]
+        self.assertIn("server1", msg)
+        self.assertIn("no longer reports health status", msg)
+        self.assertNotIn("still `starting`", msg)
+
     async def test_start_command_already_running(self):
         """A failed start_container() (e.g. "already running") must report that
         message directly and never touch health at all."""

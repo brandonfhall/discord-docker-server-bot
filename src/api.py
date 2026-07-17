@@ -48,7 +48,11 @@ def root():
 def status():
     out = {}
     for name in ALLOWED_CONTAINERS:
-        # health is None for containers with no Docker healthcheck configured
+        # health is None for containers with no Docker healthcheck configured.
+        # status is the literal string "error" (not None/"not found") if the
+        # Docker daemon itself was unreachable for this container -- see M2 in
+        # docker_control.container_status(). No special-casing needed here:
+        # the string passes straight through as an honest signal to monitoring.
         out[name] = {
             "status": docker_control.container_status(name),
             "health": docker_control.container_health(name),
