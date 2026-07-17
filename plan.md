@@ -18,8 +18,8 @@ a one-line entry here — only residual notes (deviations, decisions, gotchas) a
 | 4 | M6 — event-loop I/O + L12 | ✅ done — `f5550a0` |
 | 5 | L1, L2, L3 — docker_control | ✅ done — `9dea118` |
 | 6 | L5, L6, C1, C2, C3 — bot.py UX + consolidation | ✅ done — `b898f2f` |
-| 7 | L7, L8, L11, C4, L10 — hygiene + docs | ☐ **next** |
-| 8 | L4 — persist maintenance mode | ☐ not started |
+| 7 | L7, L8, L11, C4, L10 — hygiene + docs | ✅ done — `46aedbe` |
+| 8 | L4 — persist maintenance mode | ☐ **next** |
 | 9 | Docs + architecture accuracy audit | ☐ not started |
 | 10 | Final plan.md prune | ☐ not started |
 
@@ -258,27 +258,12 @@ L5: `!status` shows "not found" not "**None**"; `!logs 0` clamps to 1; `!start` 
 on a pending countdown; `!logs` maintenance check moved to top. L6: `on_message` logs a char count, not
 full bot-sent content (which was echoing `!logs`/`!history` replies back into `bot.log` → `/status`).
 
-### L7 — Dependency pinning drift: `requests` floating in an otherwise fully-pinned runtime set; `pytest`/`pytest-cov`/`ruff` unpinned in dev requirements
+### L7 / L8 / L11 — deps + config hygiene — ✅ DONE (Phase 7, `46aedbe`)
 
-**Location:** [requirements.txt](requirements.txt) line 6 (`requests>=2.32.4`); [requirements-dev.txt](requirements-dev.txt) lines 3–5.
-
-Dependabot maintains pins weekly, so floating specs buy nothing and cost reproducibility: a new ruff
-release with changed default rules can break CI on a commit that touched nothing, and the shipped
-image's `requests` can differ from what CI tested that week.
-**Fix:** pin all four at whatever versions resolve today (`requests==…`, `pytest==…`, `pytest-cov==…`,
-`ruff==…`); dependabot's weekly pip group takes over from there. (The `>=2.32.4` floor was cycle-1
-H2's CVE fix — any pin at or above that version preserves it.)
-
-### L8 — Path-type env vars set to empty string crash or misbehave at startup
-
-**Location:** [src/config.py](src/config.py):45, 47, 86 (`PERMISSIONS_FILE`, `LOG_FILE`, `HISTORY_FILE`).
-
-An explicit `LOG_FILE=` (empty) in `.env` → `.strip()` → `""` → `RotatingFileHandler("")` raises an
-unhelpful error at import time; empty `PERMISSIONS_FILE`/`HISTORY_FILE` misbehave similarly later.
-**Fix:** apply the `_int_env` philosophy to paths: `os.getenv("LOG_FILE", "").strip() or "data/bot.log"`
-for all three.
-**Test:** `test_config.py`: reload config with `LOG_FILE=""` → default used (follow the existing
-`TestNewConfig` reload pattern).
+L7: pinned `requests==2.32.5`, `pytest==9.0.2`, `pytest-cov==7.1.0`, `ruff==0.15.11` (verified against
+`pip freeze`). L8: empty `PERMISSIONS_FILE`/`LOG_FILE`/`HISTORY_FILE` now fall back to defaults, not `""`.
+L11: `LOG_LEVEL` parsed + validated in config.py; `os.getenv` now appears nowhere outside config.py.
+233 tests (+6).
 
 ### L9 — `/status` accepts the token as a `?token=` query parameter — ✅ CLOSED, WON'T FIX
 
@@ -292,39 +277,12 @@ preferred. **Do not re-flag in cycle 3** — this is a closed decision, not an o
 if the deployment model changes (i.e. `/status` becomes reachable from an untrusted network, or the
 proxy tier moves to a different trust boundary than the token).
 
-### L11 — `LOG_LEVEL` is read with `os.getenv` in `bot.py`, bypassing `config.py` entirely *(found during Phase 1 review)*
+### L11 — LOG_LEVEL bypass — ✅ DONE (Phase 7, folded into the L7/L8/L11 entry above).
 
-**Location:** [src/bot.py](src/bot.py):35 — `setup_logging(LOG_FILE, os.getenv("LOG_LEVEL", "INFO"), [...])`.
+### L10 — role-name permission limitation — ✅ DONE (Phase 7, `46aedbe`, docs-only)
 
-`LOG_LEVEL` is the only env var the app reads outside `config.py`, directly violating CLAUDE.md's
-"Adding a new env var" rule #2 ("Import it from `.config` wherever it's used — don't call
-`os.getenv()` in handler code"). It is not parsed or validated in `config.py` at all, so unlike every
-other var it gets no fallback warning: an invalid value (`LOG_LEVEL=verbose`) silently resolves to
-INFO via `getattr(logging, ..., logging.INFO)` in [src/logging_config.py](src/logging_config.py):42.
-
-Not a bug — both compose files pass it and the fallback is safe — but it's the exact drift M1 exists
-to prevent, and it means the env-var inventory in `config.py` is incomplete for anyone auditing it.
-**Fix:** parse `LOG_LEVEL = (os.getenv("LOG_LEVEL") or "INFO").strip().upper()` in `config.py`
-(warning on an unrecognized level, following the `_int_env` philosophy), import it in `bot.py`, and
-drop the `os` import there if it becomes unused (it won't — `os.path.abspath` is used at lines 147–148).
-Fold into **Phase 7** with the other config hygiene (L8).
-**Test:** `test_config.py` — an invalid `LOG_LEVEL` falls back to INFO with a warning.
-
-### L10 — Role-name-based permissions silently break when a Discord role is renamed *(DECIDED: document only — Phase 7)*
-
-**Location:** [src/permissions.py](src/permissions.py):94–98; the storage format is role *names*.
-
-Renaming "ServerAdmin" in Discord instantly revokes every grant tied to it, with no signal to anyone.
-Role IDs are rename-stable, but migrating (store IDs, resolve names on `!perm add`, display names on
-`!perm list`) changes the file format and needs a migration path for existing installs.
-
-**Maintainer decision (2026-07-17): document the limitation, no code change.** No role-ID migration
-this cycle. **Deliverable:** a note in README's permissions section stating that permissions are
-matched by role *name*, and that renaming a Discord role silently revokes its grants and requires
-re-granting via `!perm add`. Fold into Phase 7 (docs-only). Known limitation, deliberately accepted —
-revisit only if this bot is distributed beyond single-server use, where the migration cost only grows.
-
----
+README permissions section now states permissions match by role *name* and a rename requires
+re-granting via `!perm add`. No code change (maintainer decision).
 
 ## CLEANUP / CONSOLIDATION
 
@@ -340,6 +298,13 @@ line numbers (no await between bot.py:453 and :462). 227 tests. All four doc fil
 message for an artificially-patched empty list — it exercises `resolve_container`'s fallback for a
 state config.py makes unreachable. Slightly odd but harmless; a future cleanup could just delete the
 test since it covers no reachable path.
+
+
+### C4 — test isolation for PERMISSIONS_FILE — ✅ DONE (Phase 7, `46aedbe`)
+
+conftest now redirects `PERMISSIONS_FILE` to tmp; `test_permissions.py` uses a tempdir path instead of
+the repo root. CLAUDE.md test-env note updated.
+
 
 ## Phase plan (execution order)
 

@@ -2,6 +2,7 @@ import json
 import os
 import stat
 import sys
+import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
 
@@ -10,7 +11,7 @@ from src import permissions
 
 class TestPermissions(unittest.TestCase):
     def setUp(self):
-        self.test_file = "test_permissions.json"
+        self.test_file = os.path.join(tempfile.gettempdir(), "discord-bot-test-permissions.json")
         self.original_file = permissions.PERMISSIONS_FILE
         permissions.PERMISSIONS_FILE = self.test_file
 

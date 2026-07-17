@@ -16,6 +16,7 @@ from .config import (
     ALLOWED_CONTAINERS,
     DISCORD_GUILD_ID,
     LOG_FILE,
+    LOG_LEVEL,
     ANNOUNCE_CHANNEL_ID,
     ANNOUNCE_ROLE_ID,
     ALLOWED_CHANNEL_IDS,
@@ -32,7 +33,7 @@ from .state import state
 VALID_ACTIONS = permissions.ALL_ACTIONS
 
 
-setup_logging(LOG_FILE, os.getenv("LOG_LEVEL", "INFO"), [BOT_TOKEN, STATUS_TOKEN])
+setup_logging(LOG_FILE, LOG_LEVEL, [BOT_TOKEN, STATUS_TOKEN])
 
 intents = discord.Intents.default()
 intents.message_content = True

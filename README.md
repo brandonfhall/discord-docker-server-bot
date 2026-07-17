@@ -71,7 +71,7 @@ Enable **Developer Mode** in Discord (User Settings > Advanced) to copy IDs by r
 | `SHUTDOWN_DELAY` | | Seconds between announcement and stop/restart | `300` |
 | `STATUS_PORT` | | Port for the HTTP status API | `8000` |
 | `DOCKER_MAX_WORKERS` | | Max concurrent Docker operations | `2` |
-| `LOG_LEVEL` | | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`) | `INFO` |
+| `LOG_LEVEL` | | Logging verbosity (`DEBUG`, `INFO`, `WARNING`, `ERROR`, `CRITICAL`) | `INFO` |
 | `PERMISSIONS_FILE` | | Path to permissions JSON file | `data/permissions.json` |
 | `LOG_FILE` | | Path to log file | `data/bot.log` |
 | `COMMAND_COOLDOWN` | | Per-user command cooldown in seconds | `5` |
@@ -123,6 +123,8 @@ All commands use the `!` prefix. Container name is optional when only one contai
 Valid actions: `start`, `stop`, `stop_now`, `restart`, `restart_now`, `cancel`, `announce`, `logs`, `stats`, `maintenance`, `history`.
 
 Discord Administrators bypass all permission checks.
+
+> **Note:** permissions are matched by role **name**, not role ID. Renaming a Discord role silently revokes every grant tied to it, with no warning — re-grant it with `!perm add` after renaming a role.
 
 ## HTTP Status API
 

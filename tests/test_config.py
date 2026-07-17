@@ -118,6 +118,66 @@ class TestNewConfig(unittest.TestCase):
         self.assertGreaterEqual(config.HEALTHCHECK_MAX_WAIT, 0)
 
 
+class TestPathAndLogLevelConfig(unittest.TestCase):
+    """L8/L11: path env vars fall back cleanly on empty string; LOG_LEVEL is
+    parsed and validated in config.py rather than read ad hoc in bot.py."""
+
+    def tearDown(self):
+        # Restore config to the harness-standard state for every other test module.
+        os.environ.pop("LOG_LEVEL", None)
+        os.environ.pop("LOG_FILE", None)
+        os.environ.pop("HISTORY_FILE", None)
+        os.environ.pop("PERMISSIONS_FILE", None)
+        from src import config
+
+        importlib.reload(config)
+
+    def test_log_level_invalid_falls_back_to_info(self):
+        from src import config
+
+        captured = StringIO()
+        with patch.dict(os.environ, {"LOG_LEVEL": "verbose"}):
+            with patch("sys.stderr", captured):
+                importlib.reload(config)
+        self.assertEqual(config.LOG_LEVEL, "INFO")
+        self.assertIn("WARNING", captured.getvalue())
+
+    def test_log_level_missing_defaults_to_info(self):
+        from src import config
+
+        with patch.dict(os.environ, {"LOG_LEVEL": ""}):
+            importlib.reload(config)
+        self.assertEqual(config.LOG_LEVEL, "INFO")
+
+    def test_log_level_valid_value_is_uppercased(self):
+        from src import config
+
+        with patch.dict(os.environ, {"LOG_LEVEL": "debug"}):
+            importlib.reload(config)
+        self.assertEqual(config.LOG_LEVEL, "DEBUG")
+
+    def test_log_file_empty_falls_back_to_default(self):
+        from src import config
+
+        with patch.dict(os.environ, {"LOG_FILE": ""}):
+            importlib.reload(config)
+        self.assertEqual(config.LOG_FILE, "data/bot.log")
+
+    def test_history_file_empty_falls_back_to_default(self):
+        from src import config
+
+        with patch.dict(os.environ, {"HISTORY_FILE": ""}):
+            importlib.reload(config)
+        self.assertEqual(config.HISTORY_FILE, "data/history.json")
+
+    def test_permissions_file_empty_falls_back_to_default(self):
+        from src import config
+
+        with patch.dict(os.environ, {"PERMISSIONS_FILE": ""}):
+            importlib.reload(config)
+        self.assertEqual(config.PERMISSIONS_FILE, "data/permissions.json")
+
+
 class TestGuildLockRequired(unittest.TestCase):
     """H1: config must fail closed unless DISCORD_GUILD_ID or ALLOW_ANY_GUILD is set."""
 

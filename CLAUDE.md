@@ -35,7 +35,7 @@ docker compose -f docker-compose.dev.yml up --build
 docker build . --file Dockerfile --tag bot-test:latest
 ```
 
-Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`, `DISCORD_GUILD_ID`) are set by [tests/conftest.py](tests/conftest.py); don't re-set them in individual tests. `conftest.py` also redirects `LOG_FILE`/`HISTORY_FILE` to a tmp path so test runs don't write into the repo's `data/` directory.
+Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`, `DISCORD_GUILD_ID`) are set by [tests/conftest.py](tests/conftest.py); don't re-set them in individual tests. `conftest.py` also redirects `LOG_FILE`/`HISTORY_FILE`/`PERMISSIONS_FILE` to a tmp path so test runs don't write into the repo's `data/` directory.
 
 ## House rules
 
