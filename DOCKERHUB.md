@@ -49,6 +49,8 @@ volumes:
 | `COMMAND_COOLDOWN` | | Per-user command cooldown in seconds | `5` |
 | `CRASH_CHECK_INTERVAL` | | Seconds between crash-detection polls | `30` |
 | `CRASH_ALERT_CHANNEL_ID` | | Channel for crash alerts | `0` (uses `ANNOUNCE_CHANNEL_ID`) |
+| `HEALTHCHECK_POLL_INTERVAL` | | Seconds between health polls after `!start`, for containers with a Docker `HEALTHCHECK` | `5` |
+| `HEALTHCHECK_MAX_WAIT` | | Seconds `!start` watches a healthcheck before giving up (`0` = no limit) | `1800` |
 
 See the [full variable list](https://github.com/brandonfhall/discord-docker-server-bot#environment-variables) for additional options (`STATUS_PORT`, `LOG_LEVEL`, `HISTORY_FILE`, etc.).
 
