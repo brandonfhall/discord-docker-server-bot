@@ -30,14 +30,13 @@ class BotState:
         task = self.pending_ops.get(container)
         return task is not None and not task.done()
 
-    def is_maintenance_active(self, command_name: str) -> bool:
-        """Return True if maintenance mode blocks the given command.
+    def is_maintenance_active(self) -> bool:
+        """Return True if maintenance mode is currently active.
 
         Only container-mutating commands (start, stop, restart, announce, logs,
         stats) call this at all -- admin/read-only commands (maintenance itself,
-        perm*, guide, history) never do, so they remain available during
-        maintenance mode regardless of what's passed here. `command_name` is
-        accepted for parity with those call sites, not consulted.
+        perm*, guide, history, status, cancel) never do, so they remain
+        available during maintenance mode simply by not calling it.
         """
         return self.maintenance_mode
 

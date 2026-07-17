@@ -53,7 +53,7 @@ Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`, `DISCORD_GUILD_ID`) are set by
 2. Add `@commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)` unless there's a reason not to.
 3. If the command introduces a new permission action, add it to `ALL_ACTIONS` in [src/permissions.py](src/permissions.py) (single source of truth — `bot.py` re-exports it as `VALID_ACTIONS`).
 4. Call `await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "<action>", target)` for auditable actions.
-5. If the command mutates containers, also check `state.is_maintenance_active(...)` and bail with a maintenance message.
+5. If the command mutates containers, start the handler with `if await _bail_if_maintenance(ctx): return` (it sends the maintenance message and returns True when blocked). Read-only/admin commands (`cancel`, `status`, `perm*`, `guide`, `history`, `maintenance`) deliberately skip this.
 6. Add unit tests in the matching file under [tests/](tests/) (e.g. a new bot command goes in [tests/test_bot_commands.py](tests/test_bot_commands.py)). Follow the existing `unittest.IsolatedAsyncioTestCase` patterns with `AsyncMock` for `ctx.send`.
 7. Update the Commands table in both [README.md](README.md) and [DOCKERHUB.md](DOCKERHUB.md).
 

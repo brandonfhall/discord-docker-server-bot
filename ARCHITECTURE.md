@@ -108,7 +108,7 @@ A single lazily-constructed `_docker_client` is reused for the lifetime of the p
 
 ### Maintenance mode
 
-- Toggled via `!maintenance on/off`. `BotState.is_maintenance_active()` just returns `state.maintenance_mode` — only the six container-mutating commands (`start`, `stop`, `restart`, `announce`, `logs`, `stats`) call it at all. `guide`, `history`, `perm*`, and `maintenance` itself never call it, so they remain available during maintenance mode by construction rather than through an exemption list.
+- Toggled via `!maintenance on/off`. `BotState.is_maintenance_active()` takes no argument and just returns `state.maintenance_mode`. The six container-mutating commands (`start`, `stop`/`restart` via `_delayed_container_op`, `announce`, `logs`, `stats`) each start with `if await _bail_if_maintenance(ctx): return` — a shared `bot.py` helper that checks `is_maintenance_active()`, sends the maintenance message, and reports whether the caller should bail (C1: replaces five copies of the same three-line check). `cancel`, `status`, `guide`, `history`, `perm*`, and `maintenance` itself never call it, so they remain available during maintenance mode by construction rather than through an exemption list — `cancel` deliberately so, since enabling maintenance already cancels everything and cancelling during maintenance is harmless.
 - `maintenance_cmd` intentionally has no `@commands.cooldown`: an admin must be able to toggle it again immediately during an active incident.
 - Enabling maintenance calls `state.cancel_all_pending()`, which cancels and removes all in-flight stop/restart countdowns. The cancelled container names are included in the confirmation message.
 

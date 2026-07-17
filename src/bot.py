@@ -88,6 +88,20 @@ def has_permission(action: str):
     return commands.check(predicate)
 
 
+async def _bail_if_maintenance(ctx) -> bool:
+    """If maintenance mode is active, send the maintenance message and return True.
+
+    Callers should `return` immediately when this returns True. Only
+    container-mutating commands (start, stop/restart via _delayed_container_op,
+    announce, logs, stats) call this; cancel, status, maintenance itself,
+    perm*, guide, and history deliberately do not (see C1/ARCHITECTURE.md).
+    """
+    if state.is_maintenance_active():
+        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
+        return True
+    return False
+
+
 async def resolve_container(ctx, name: str):
     """Helper to resolve the target container name."""
     if name:
@@ -99,11 +113,9 @@ async def resolve_container(ctx, name: str):
     if len(ALLOWED_CONTAINERS) == 1:
         return ALLOWED_CONTAINERS[0]
 
-    if len(ALLOWED_CONTAINERS) > 1:
-        await ctx.send(f"Multiple containers configured. Please specify one: {', '.join(ALLOWED_CONTAINERS)}")
-        return None
-
-    await ctx.send("No allowed containers configured.")
+    # ALLOWED_CONTAINERS can never be empty here -- config.py raises at import
+    # time if it is (C3) -- so the only remaining case is "more than one".
+    await ctx.send(f"Multiple containers configured. Please specify one: {', '.join(ALLOWED_CONTAINERS)}")
     return None
 
 
@@ -160,7 +172,11 @@ async def on_command(ctx):
 @bot.event
 async def on_message(message):
     if message.author == bot.user:
-        logging.info(f"Bot sent: '{message.content}' to {message.channel}")
+        # L6: log metadata only, not content -- full content here would echo
+        # !logs/!history replies (up to ~1900 chars of container log) into
+        # bot.log, which /status then re-serves, amplifying noise and aging
+        # real events out of the log window faster.
+        logging.info(f"Bot sent {len(message.content)} chars to {message.channel}")
     await bot.process_commands(message)
 
 
@@ -269,24 +285,27 @@ async def _before_crash_check():
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def start(ctx, container_name: str = None):
     """Starts the container."""
-    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
-        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
+    if await _bail_if_maintenance(ctx):
         return
     target = await resolve_container(ctx, container_name)
     if not target:
         return
     logging.info(f"User {ctx.author} requested START for container '{target}'")
     await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "start", target)
-    await ctx.send(f"Starting {target}...")
+    starting_msg = f"Starting {target}..."
+    if state.has_pending_op(target):
+        # L5: inform, don't block -- a pending stop/restart countdown will
+        # still kill the container it's scheduled against a few minutes after
+        # this start succeeds, unless the user cancels it.
+        starting_msg += f"\nNote: a stop/restart countdown is scheduled for `{target}` -- `!cancel` to abort."
+    await ctx.send(starting_msg)
     res = await docker_control.run_blocking(docker_control.start_container, target)
     logging.info(f"START result for {ctx.author}: {res.message}")
     if not res.success:
         await ctx.send(res.message)
         return
 
-    # Re-seed the crash-alerting baseline so the next poll doesn't see a
-    # stale "not running" status and fire a false crash alert.
-    state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
+    await _reseed_crash_baseline(target)
 
     health = await docker_control.run_blocking(docker_control.container_health, target)
     if health is None:
@@ -349,6 +368,21 @@ async def _wait_for_healthy(ctx, target: str, success_message: str):
         logging.error(f"Error while waiting for '{target}' to become healthy: {e}", exc_info=True)
 
 
+async def _reseed_crash_baseline(target: str):
+    """Re-seed the crash-alerting baseline after a bot-initiated start/stop/restart.
+
+    Without this, the next crash_check_loop poll would still see the
+    pre-operation status in state.last_known_status (e.g. "exited" right
+    after a start, or "running" right after a stop) and either miss a real
+    transition or fire a false crash alert for a change the bot itself just
+    made. A stored "error" here (M2: daemon unreachable for this read) is
+    self-correcting -- crash_check_loop's `prev == "running"` alert check
+    never matches "error", so it just delays the next real baseline update
+    rather than causing a false alert.
+    """
+    state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
+
+
 def _format_delay(seconds: int) -> str:
     """Return a human-readable delay string, e.g. '5 minutes', '30 seconds', or
     '1 minute 30 seconds' (a bare minute count would silently drop the remainder)."""
@@ -363,8 +397,7 @@ def _format_delay(seconds: int) -> str:
 
 async def _delayed_container_op(ctx, *args, action, now_action, docker_func, immediate_msg, countdown_msg_tpl, verb):
     """Shared logic for stop and restart commands with optional 'now' flag."""
-    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
-        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
+    if await _bail_if_maintenance(ctx):
         return
 
     now = any(a.lower() == "now" for a in args)
@@ -411,9 +444,7 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
         res = await docker_control.run_blocking(docker_func, target)
         logging.info(f"Immediate {action.upper()} result for {ctx.author}: {res.message}")
         if res.success:
-            # Re-seed the crash-alerting baseline -- otherwise the next poll sees
-            # this bot-initiated stop/restart as an unexpected crash.
-            state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
+            await _reseed_crash_baseline(target)
         await ctx.send(f"{action.capitalize()} result: {res.message}")
         return
 
@@ -467,9 +498,7 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
             result = await docker_control.run_blocking(docker_func, target)
             logging.info(f"{action.upper()} execution result for {target}: {result.message}")
             if result.success:
-                # Re-seed the crash-alerting baseline -- otherwise the next poll sees
-                # this bot-initiated stop/restart as an unexpected crash.
-                state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)
+                await _reseed_crash_baseline(target)
             await ctx.send(f"{action.capitalize()} result: {result.message}")
         except Exception as e:
             logging.error(f"Error during scheduled {action} of {target}: {e}", exc_info=True)
@@ -550,6 +579,12 @@ async def status_cmd(ctx, container_name: str = None):
         # "not found" behavior a daemon outage used to produce.
         await ctx.send(f"Could not check status for `{target}` -- the Docker daemon is unreachable. Try again shortly.")
         return
+    if res is None:
+        # L5: container_status() returns None when no container by this name
+        # exists (as opposed to "error", handled above, for a daemon outage).
+        # Without this branch the fallback below renders "Status for `x`: **None**".
+        await ctx.send(f"Container `{target}` not found.")
+        return
     health = await docker_control.run_blocking(docker_control.container_health, target)
     lines = [f"Status for `{target}`: **{res}**"]
     if health:
@@ -577,8 +612,7 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
     Usage: !announce <message> (if single container)
            !announce <container_name> <message> (if multiple)
     """
-    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
-        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
+    if await _bail_if_maintenance(ctx):
         return
     target = None
     message = None
@@ -644,6 +678,11 @@ async def guide(ctx):
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
     """View recent container logs. Usage: !logs [container] [lines]"""
+    # L5: checked first, before arg-parsing, for consistency with every other
+    # maintenance-gated handler (start, _delayed_container_op, announce, stats).
+    if await _bail_if_maintenance(ctx):
+        return
+
     container_name = None
     lines = 25
     unrecognized = []
@@ -651,7 +690,9 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
         if arg is None:
             continue
         if arg.isdigit():
-            lines = min(int(arg), 50)
+            # L5: clamp to at least 1 -- "0" passes isdigit() but tail=0 yields
+            # an empty result and a confusing "No recent logs" reply.
+            lines = min(max(int(arg), 1), 50)
         elif arg in ALLOWED_CONTAINERS:
             container_name = arg
         else:
@@ -659,10 +700,6 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
 
     if unrecognized:
         await ctx.send(f"Unrecognized argument(s): {', '.join(unrecognized)}. Usage: `!logs [container] [lines]`")
-        return
-
-    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
-        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
         return
     target = await resolve_container(ctx, container_name)
     if not target:
@@ -688,8 +725,7 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def stats_cmd(ctx, container_name: str = None):
     """Show container CPU and memory usage."""
-    if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else ""):
-        await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
+    if await _bail_if_maintenance(ctx):
         return
     target = await resolve_container(ctx, container_name)
     if not target:

@@ -91,7 +91,7 @@ All commands use the `!` prefix. Container name is optional when only one contai
 
 | Command | Permission | Description |
 |---|---|---|
-| `!start [container]` | `start` | Start the container. If it defines a Docker `HEALTHCHECK`, the bot reports "started" only once the healthcheck reports healthy (see `HEALTHCHECK_POLL_INTERVAL`/`HEALTHCHECK_MAX_WAIT`); otherwise it reports success as soon as the container process launches |
+| `!start [container]` | `start` | Start the container. If it defines a Docker `HEALTHCHECK`, the bot reports "started" only once the healthcheck reports healthy (see `HEALTHCHECK_POLL_INTERVAL`/`HEALTHCHECK_MAX_WAIT`); otherwise it reports success as soon as the container process launches. Warns (but doesn't block) if a stop/restart countdown is already scheduled for the container |
 | `!stop [container]` | `stop` | Announce shutdown, wait for delay, then stop |
 | `!stop [container] now` | `stop` + `stop_now` | Immediately stop (skips countdown, cancels pending) |
 | `!restart [container]` | `restart` | Announce restart, wait for delay, then restart |

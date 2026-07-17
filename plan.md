@@ -17,8 +17,8 @@ a one-line entry here — only residual notes (deviations, decisions, gotchas) a
 | 3 | M5 — atomic writes | ✅ done — `5a5e2a0` |
 | 4 | M6 — event-loop I/O + L12 | ✅ done — `f5550a0` |
 | 5 | L1, L2, L3 — docker_control | ✅ done — `9dea118` |
-| 6 | L5, L6, C1, C2, C3 — bot.py UX + consolidation | ☐ **next** |
-| 7 | L7, L8, L11, C4, L10 — deps/config/test/docs hygiene | ☐ not started |
+| 6 | L5, L6, C1, C2, C3 — bot.py UX + consolidation | ✅ done — `b898f2f` |
+| 7 | L7, L8, L11, C4, L10 — hygiene + docs | ☐ **next** |
 | 8 | L4 — persist maintenance mode | ☐ not started |
 | 9 | Docs + architecture accuracy audit | ☐ not started |
 | 10 | Final plan.md prune | ☐ not started |
@@ -252,33 +252,11 @@ rows) and ARCHITECTURE.md's Maintenance-mode section.
 **Test:** `test_state.py`: toggle on → construct a fresh `BotState` (reload path) → still on, reason
 preserved.
 
-### L5 — UX batch in `bot.py` handlers
+### L5 / L6 — bot.py UX + logging — ✅ DONE (Phase 6, `b898f2f`)
 
-1. **`!status` renders "None"** for a not-found container ([src/bot.py](src/bot.py):508–510):
-   `Status for x: **None**`. When `res is None`, show "not found" (and "docker error" if M2's
-   `"error"` status is adopted).
-2. **`!logs 0` accepted** ([src/bot.py](src/bot.py):609–610): `isdigit()` allows `0`; docker `tail=0`
-   yields empty output and a confusing "No recent logs". Clamp: `lines = min(max(int(arg), 1), 50)`.
-3. **`!start` during a pending stop countdown doesn't warn** ([src/bot.py](src/bot.py):254–288): the
-   start succeeds, then the countdown kills the container minutes later. After resolving `target`, if
-   `state.has_pending_op(target)`, append a note to the reply ("a stop/restart countdown is scheduled
-   for this container — `!cancel` to abort"). Inform, don't block.
-4. **`!logs` checks maintenance after arg-parsing** ([src/bot.py](src/bot.py):616–622) while every
-   other handler checks first — harmless, but move it to the top for consistency (C1's decorator
-   resolves this by construction if that route is taken).
-
-**Tests:** one per bullet in `test_bot_commands.py`, following existing patterns.
-
-### L6 — `on_message` logs every bot-sent message at INFO, echoing `!logs`/`!history` output back into the log file (which `/status` then re-serves)
-
-**Location:** [src/bot.py](src/bot.py):160–164.
-
-Every `!logs` invocation writes up to ~1900 chars of container log content into `bot.log`, which
-`/status` then includes in its `logs` field — content amplification and noise that ages real events
-out of the 50-line window and the 5 MB rotation faster.
-**Fix:** drop to `logging.debug`, or log only metadata:
-`logging.info(f"Bot sent {len(message.content)} chars to {message.channel}")`. Keep `on_command`'s
-INFO line as-is — that's the useful audit trail.
+L5: `!status` shows "not found" not "**None**"; `!logs 0` clamps to 1; `!start` warns (doesn't block)
+on a pending countdown; `!logs` maintenance check moved to top. L6: `on_message` logs a char count, not
+full bot-sent content (which was echoing `!logs`/`!history` replies back into `bot.log` → `/status`).
 
 ### L7 — Dependency pinning drift: `requests` floating in an otherwise fully-pinned runtime set; `pytest`/`pytest-cov`/`ruff` unpinned in dev requirements
 
@@ -350,58 +328,18 @@ revisit only if this bot is distributed beyond single-server use, where the migr
 
 ## CLEANUP / CONSOLIDATION
 
-### C1 — Maintenance-check boilerplate repeated in five handlers; `is_maintenance_active` ignores its argument
+### C1 / C2 / C3 — bot.py consolidation — ✅ DONE (Phase 6, `b898f2f`)
 
-**Location:** [src/bot.py](src/bot.py):256–258, 336–338, 536–538, 620–622, 647–649; [src/state.py](src/state.py):33–42.
+C1: `_bail_if_maintenance(ctx)` replaces five copies; `is_maintenance_active` lost its dead parameter.
+C2: `_reseed_crash_baseline(target)` replaces three copies. C3: dead empty-list branch removed from
+`resolve_container`. **Maintenance policy verified unchanged** (start/stop/restart/announce/logs/stats
+check; cancel/status/maintenance/perm*/guide/history don't). **Dedup invariant re-verified** at the new
+line numbers (no await between bot.py:453 and :462). 227 tests. All four doc files updated.
 
-The same three lines (`if state.is_maintenance_active(ctx.command.qualified_name if ctx.command else "")…`)
-appear five times, and `is_maintenance_active`'s own docstring admits the parameter is decorative.
-**Fix (two acceptable routes):**
-- *Decorator:* a `commands.check` raising a dedicated `MaintenanceActive(commands.CheckFailure)`,
-  handled in `on_command_error` with the maintenance message. **Careful:** it must be distinct from
-  both the generic permission-denial branch and `SilentCheckFailure`, and the maintenance reply must
-  only be sent for allowed origins (checks run after `check_guild`, so ordering already protects this
-  — verify, don't assume).
-- *Helper:* `async def _bail_if_maintenance(ctx) -> bool` — smaller diff, lower risk.
-
-Either way: drop `is_maintenance_active`'s unused parameter, update call sites, and update
-ARCHITECTURE.md's Maintenance-mode section. **Preserve current policy exactly** — note `!cancel`
-deliberately does *not* check maintenance (enabling maintenance already cancels everything, and
-cancelling during maintenance is harmless) while `!logs`/`!stats` do. This is a refactor, not a
-policy change.
-
-### C2 — Crash-baseline re-seed snippet duplicated three times
-
-**Location:** [src/bot.py](src/bot.py):271–273, 377–379, 432–435.
-
-`state.last_known_status[target] = await docker_control.run_blocking(docker_control.container_status, target)`
-plus its explanatory comment appears in `start`, the `now` path, and `do_operation`.
-**Fix:** extract `async def _reseed_crash_baseline(target: str)` in `bot.py` (the helper just wires
-the awaited call; the state write stays a `state` attribute mutation); keep one authoritative comment
-at the definition.
-
-### C3 — Dead branch in `resolve_container`
-
-**Location:** [src/bot.py](src/bot.py):106–107.
-
-`ALLOWED_CONTAINERS` can never be empty (config.py:32–33 raises at import), so the "No allowed
-containers configured" branch is unreachable. Remove it. (The redundant empty-list guard in
-docker_control.py:58–59 **stays** — that layer is deliberately defensive per house rules.)
-
-### C4 — Test hygiene: `test_permissions.py` writes into the repo root; `conftest.py` doesn't redirect `PERMISSIONS_FILE`
-
-**Location:** [tests/test_permissions.py](tests/test_permissions.py):11–16; [tests/conftest.py](tests/conftest.py).
-
-`test_permissions.json` is created/deleted in the CWD (a mid-run crash strands it in the repo), and
-`PERMISSIONS_FILE` is the one data-path env var conftest does *not* redirect to tmp. Verified no
-current test writes `data/permissions.json` unpatched (its mtime predates the suite run) — but any
-future test invoking a real permission check on a non-admin ctx would silently write into the repo.
-**Fix:** point `test_permissions.py` at a temp path, and add
-`os.environ.setdefault("PERMISSIONS_FILE", os.path.join(tempfile.gettempdir(), "discord-bot-tests-permissions.json"))`
-to conftest alongside the existing LOG_FILE/HISTORY_FILE lines (update the conftest comment and
-CLAUDE.md's test-env note).
-
----
+**Residual note:** `test_resolve_container_empty_list` now asserts the "Multiple containers configured"
+message for an artificially-patched empty list — it exercises `resolve_container`'s fallback for a
+state config.py makes unreachable. Slightly odd but harmless; a future cleanup could just delete the
+test since it covers no reachable path.
 
 ## Phase plan (execution order)
 

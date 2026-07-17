@@ -280,6 +280,30 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(any("started" in c for c in calls))
         mock_loop.create_task.assert_not_called()
 
+    async def test_start_command_warns_about_pending_op(self):
+        """L5.3: !start on a container with a scheduled stop/restart countdown
+        must warn in its reply (inform, don't block) -- otherwise the start
+        succeeds and the pending countdown silently kills it minutes later."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        mock_loop = MagicMock()
+
+        mock_task = MagicMock()
+        mock_task.done.return_value = False
+        state.pending_ops["server1"] = mock_task
+        try:
+            with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+                with patch("src.bot.docker_control.run_blocking", new=self._start_run_blocking()):
+                    with patch.object(bot_module.bot, "loop", mock_loop):
+                        await bot_module.start.callback(ctx, container_name=None)
+            calls = [c[0][0] for c in ctx.send.call_args_list]
+            self.assertTrue(any("countdown is scheduled" in c for c in calls))
+            self.assertTrue(any("cancel" in c.lower() for c in calls))
+        finally:
+            state.pending_ops.pop("server1", None)
+
     async def test_start_command_with_healthcheck_defers_to_background_task(self):
         """A container with a HEALTHCHECK must not get an immediate "started"
         reply -- start() sends only "Starting..." and hands off to a
@@ -555,6 +579,24 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
             state.pending_ops.clear()
             state.pending_op_info.clear()
 
+    async def test_status_command_not_found(self):
+        """L5.1: container_status() returning None (no such container) must
+        render a "not found" message, not "Status for `x`: **None**"."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch(
+                "src.bot.docker_control.run_blocking",
+                new=self._status_run_blocking(status=None),
+            ):
+                await bot_module.status_cmd.callback(ctx, container_name=None)
+        ctx.send.assert_called_once()
+        msg = ctx.send.call_args[0][0]
+        self.assertIn("not found", msg.lower())
+        self.assertNotIn("None", msg)
+
     # --- announce command ---
 
     async def test_announce_command_single_container(self):
@@ -739,6 +781,12 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
     # --- resolve_container ---
 
     async def test_resolve_container_empty_list(self):
+        """C3: an empty ALLOWED_CONTAINERS is unreachable in production (config.py
+        raises at import time if it's empty), so the dedicated "No allowed
+        containers configured" branch was dead code and has been removed.
+        Patching to [] here is an artificial state purely to exercise
+        resolve_container's remaining fallback -- it now falls through to the
+        same "Multiple containers configured" message used for len > 1."""
         from src import bot as bot_module
 
         ctx = MagicMock()
@@ -747,7 +795,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
             result = await bot_module.resolve_container(ctx, None)
         self.assertIsNone(result)
         ctx.send.assert_called_once()
-        self.assertIn("No allowed containers", ctx.send.call_args[0][0])
+        self.assertIn("Multiple containers configured", ctx.send.call_args[0][0])
 
     # --- send_announcement ---
 
@@ -1722,6 +1770,18 @@ class TestLogsCommand(unittest.IsolatedAsyncioTestCase):
                 await bot_module.logs_cmd.callback(ctx, arg1=None, arg2=None)
         self.assertIn("No recent logs", ctx.send.call_args[0][0])
 
+    async def test_logs_command_zero_lines_clamped_to_one(self):
+        """L5.2: `!logs 0` must not pass tail=0 through to Docker (which yields
+        an empty result and a confusing "No recent logs" reply) -- clamp to 1."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        with patch.object(bot_module, "ALLOWED_CONTAINERS", ["server1"]):
+            with patch("src.bot.docker_control.run_blocking", new=AsyncMock(return_value="output")) as mock_rb:
+                await bot_module.logs_cmd.callback(ctx, arg1="0", arg2=None)
+        mock_rb.assert_any_call(docker_control.container_logs, "server1", 1)
+
     async def test_logs_command_unrecognized_arg_shows_usage(self):
         """L6: a typo'd container name (e.g. `!logs tyop_container`) must not
         silently fall back to the default container -- it should show usage."""
@@ -2050,7 +2110,7 @@ class TestMaintenanceMode(unittest.IsolatedAsyncioTestCase):
 
     def test_check_maintenance_blocks_control_commands(self):
         state.maintenance_mode = True
-        self.assertTrue(state.is_maintenance_active("start"))
+        self.assertTrue(state.is_maintenance_active())
 
 
 class TestCancelCommand(unittest.IsolatedAsyncioTestCase):
