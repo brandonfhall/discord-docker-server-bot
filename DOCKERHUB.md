@@ -1,12 +1,12 @@
 # Discord Docker Controller Bot
 
-A Discord bot that controls Docker containers (game servers, services, etc.) through `!` prefix commands. Role-based permissions, graceful shutdowns with in-game announcements, crash alerting, container logs/stats, maintenance mode, command history, and an HTTP status API.
+A Discord bot that controls Docker containers (game servers, services, etc.) — every command works as a `!` prefix command, an `@Bot` mention, or a native `/` slash command. Role-based permissions, graceful shutdowns with in-game announcements, crash alerting, container logs/stats, maintenance mode, command history, and an HTTP status API.
 
 **Full documentation:** [GitHub](https://github.com/brandonfhall/discord-docker-server-bot)
 
 ## Quick Start
 
-> **Prerequisites:** You need a Discord bot token and the bot invited to your server. See the [Discord Bot Setup guide](https://github.com/brandonfhall/discord-docker-server-bot#discord-bot-setup) for step-by-step instructions.
+> **Prerequisites:** You need a Discord bot token and the bot invited to your server with both the `bot` and `applications.commands` OAuth scopes (the second is required for `/` slash commands). See the [Discord Bot Setup guide](https://github.com/brandonfhall/discord-docker-server-bot#discord-bot-setup) for step-by-step instructions.
 
 ```yaml
 services:
@@ -75,7 +75,7 @@ See the [full variable list](https://github.com/brandonfhall/discord-docker-serv
 | `!perm add <action> <role>` | Grant permission (admin only) |
 | `!perm remove <action> <role>` | Revoke permission (admin only) |
 
-Container name is optional when only one container is configured.
+Every command works three ways — the `!` prefix (`!start`), an `@Bot` mention (`@Bot start`), or a native `/` slash command (`/start`). The table uses `!` for brevity. Container name is optional when only one container is configured.
 
 ## In-Game Announcements
 

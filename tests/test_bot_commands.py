@@ -689,6 +689,26 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         self.assertIn("start", output)
         self.assertIn("Admin", output)
 
+    async def test_perm_subcommands_require_admin(self):
+        """Every perm subcommand must carry its own administrator check, not rely
+        solely on the parent group's -- otherwise a non-admin's /perm add could slip
+        through if the hybrid slash bridge doesn't walk parent-group checks the way
+        the text path does (a privilege-escalation risk on the permission store)."""
+        from src import bot as bot_module
+        from discord.ext import commands
+
+        for cmd in (bot_module.perm_add, bot_module.perm_remove, bot_module.perm_list):
+            self.assertTrue(cmd.checks, f"{cmd.name} has no admin check of its own")
+            non_admin = MagicMock()
+            non_admin.permissions.administrator = False
+            with self.assertRaises(commands.MissingPermissions):
+                for predicate in cmd.checks:
+                    predicate(non_admin)
+            admin = MagicMock()
+            admin.permissions.administrator = True
+            for predicate in cmd.checks:
+                self.assertTrue(predicate(admin))
+
     # --- announce_error handler ---
 
     async def test_announce_error_missing_arg(self):
@@ -900,7 +920,10 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
-        ctx.message.content = "!perm badsubcmd"
+        # ctx.invoked_with is the attempted command name, already stripped of
+        # whatever prefix matched -- so this covers both "!perm ..." and the
+        # "@Bot perm ..." mention form identically.
+        ctx.invoked_with = "perm"
         ctx.guild.id = 1
         ctx.channel.id = 1
         ctx.author.guild_permissions.administrator = True
@@ -917,7 +940,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
-        ctx.message.content = "!perm badsubcmd"
+        ctx.invoked_with = "perm"
         ctx.guild.id = 1
         ctx.channel.id = 1
         ctx.author.guild_permissions.administrator = False
@@ -933,7 +956,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
-        ctx.message.content = "!unknowncmd"
+        ctx.invoked_with = "unknowncmd"
         error = commands.CommandNotFound("unknowncmd")
         with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
             await bot_module.on_command_error(ctx, error)
@@ -948,7 +971,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
-        ctx.message.content = "!perm badsubcmd"
+        ctx.invoked_with = "perm"
         ctx.guild = None
         del ctx.author.guild_permissions  # a bare MagicMock would auto-create it and mask the bug
         error = commands.CommandNotFound("perm badsubcmd")
@@ -964,7 +987,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
-        ctx.message.content = "!perm badsubcmd"
+        ctx.invoked_with = "perm"
         ctx.guild.id = 999
         ctx.author.guild_permissions.administrator = True
         error = commands.CommandNotFound("perm badsubcmd")
@@ -1000,16 +1023,36 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_on_command_error_silent_in_disallowed_channel(self):
         """SilentCheckFailure (as raised by check_guild for a disallowed origin)
-        should produce no response."""
+        on the TEXT path (ctx.interaction is None) should produce no response --
+        replying would leak the bot's presence."""
         from src import bot as bot_module
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.channel.id = 999
         ctx.command = MagicMock()
+        ctx.interaction = None  # text command, not a slash interaction
         error = bot_module.SilentCheckFailure("not allowed")
         await bot_module.on_command_error(ctx, error)
         ctx.send.assert_not_called()
+
+    async def test_on_command_error_slash_disallowed_channel_acks_ephemerally(self):
+        """SilentCheckFailure on the SLASH path (ctx.interaction is not None) must
+        acknowledge the interaction with an ephemeral refusal -- an unacknowledged
+        interaction makes Discord show the user 'This interaction failed'. Not a
+        presence leak: slash commands are synced guild-wide and are already visible
+        in the disallowed channel of the home guild."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel.id = 999
+        ctx.command = MagicMock()
+        ctx.interaction = MagicMock()  # slash invocation
+        error = bot_module.SilentCheckFailure("not allowed")
+        await bot_module.on_command_error(ctx, error)
+        ctx.send.assert_called_once()
+        self.assertTrue(ctx.send.call_args.kwargs.get("ephemeral"))
 
     async def test_on_command_error_responds_in_allowed_channel(self):
         """CheckFailure from an allowed channel (role denied) should still respond."""
@@ -2258,3 +2301,134 @@ class TestGuideUpdated(unittest.IsolatedAsyncioTestCase):
         self.assertIn("!history", output)
         self.assertIn("!maintenance", output)
         self.assertIn("!restart now", output)
+
+
+class TestSlashCommandValidity(unittest.IsolatedAsyncioTestCase):
+    """Discord rejects the whole slash-command sync (HTTP 400 / code 50035) if any
+    command/parameter description exceeds 100 chars or a name is malformed. That
+    failure only surfaces against a live gateway, so these unit checks guard the
+    limits statically -- a too-long docstring (which becomes a slash description)
+    would otherwise break slash sync in production while every other test stays green.
+    """
+
+    def _walk(self, cmds):
+        for c in cmds:
+            yield c
+            subs = getattr(c, "commands", None)
+            if subs:
+                yield from self._walk(subs)
+
+    def test_all_descriptions_within_discord_limit(self):
+        from src import bot as bot_module
+
+        for cmd in self._walk(bot_module.bot.tree.get_commands()):
+            desc = getattr(cmd, "description", "") or ""
+            self.assertLessEqual(
+                len(desc), 100, f"slash command '{cmd.qualified_name}' description is {len(desc)} chars (max 100)"
+            )
+            params = getattr(cmd, "parameters", None) or getattr(cmd, "_params", {}).values()
+            for p in params:
+                pdesc = getattr(p, "description", "") or ""
+                self.assertLessEqual(
+                    len(pdesc),
+                    100,
+                    f"param '{p.name}' of '{cmd.qualified_name}' description is {len(pdesc)} chars (max 100)",
+                )
+
+    def test_all_command_names_are_valid_slash_names(self):
+        import re
+
+        from src import bot as bot_module
+
+        # Discord slash names: 1-32 chars, lowercase, letters/digits/_/- only.
+        pattern = re.compile(r"^[a-z0-9_-]{1,32}$")
+        for cmd in self._walk(bot_module.bot.tree.get_commands()):
+            self.assertRegex(cmd.name, pattern, f"'{cmd.qualified_name}' has an invalid slash command name")
+
+
+class TestMentionPrefix(unittest.IsolatedAsyncioTestCase):
+    """Guards the @-mention command prefix, which has two live-only failure modes
+    that unit tests otherwise miss (no gateway, no real message parsing):
+    1. Discord sends "@Bot start" as "<@id>  start" (mention pill's own space plus
+       the user's typed space); without strip_after_prefix=True the parsed command
+       name is empty and the command silently does nothing.
+    2. "@BotName" in the picker often resolves to the bot's auto-created managed
+       *role* (<@&role_id>), not the bot *user* (<@user_id>); the prefix must
+       accept both.
+    """
+
+    def _make(self, content, bot_id=111, role_id=222, managed=True):
+        bot_ = MagicMock()
+        bot_.user.id = bot_id
+        msg = MagicMock()
+        msg.content = content
+        role = MagicMock()
+        role.id = role_id
+        role.is_bot_managed.return_value = managed
+        msg.guild.me.roles = [role]
+        return bot_, msg
+
+    def _parse_command_word(self, prefixes, content):
+        from discord.ext.commands.view import StringView
+        import discord.utils as u
+
+        from src import bot as bot_module
+
+        view = StringView(content)
+        matched = u.find(view.skip_string, prefixes)
+        if matched is None:
+            return None
+        if bot_module.bot.strip_after_prefix:
+            view.skip_ws()
+        return view.get_word()
+
+    def test_prefix_includes_user_nick_and_managed_role(self):
+        from src import bot as bot_module
+
+        bot_, msg = self._make("anything")
+        prefixes = bot_module._command_prefix(bot_, msg)
+        self.assertIn("<@111> ", prefixes)
+        self.assertIn("<@!111> ", prefixes)
+        self.assertIn("!", prefixes)
+        self.assertIn("<@&222> ", prefixes)
+
+    def test_non_managed_role_is_not_a_prefix(self):
+        from src import bot as bot_module
+
+        bot_, msg = self._make("anything", managed=False)
+        prefixes = bot_module._command_prefix(bot_, msg)
+        self.assertNotIn("<@&222> ", prefixes)
+
+    def test_dm_message_has_no_role_prefix_and_does_not_crash(self):
+        from src import bot as bot_module
+
+        bot_ = MagicMock()
+        bot_.user.id = 111
+        msg = MagicMock()
+        msg.content = "anything"
+        msg.guild = None  # DM
+        prefixes = bot_module._command_prefix(bot_, msg)
+        self.assertIn("!", prefixes)
+        self.assertIn("<@111> ", prefixes)
+
+    def test_double_space_user_mention_parses_to_command(self):
+        from src import bot as bot_module
+
+        self.assertTrue(bot_module.bot.strip_after_prefix, "strip_after_prefix must stay True for mention parsing")
+        bot_, msg = self._make("<@111>  start")
+        prefixes = bot_module._command_prefix(bot_, msg)
+        self.assertEqual(self._parse_command_word(prefixes, msg.content), "start")
+
+    def test_double_space_role_mention_parses_to_command(self):
+        from src import bot as bot_module
+
+        bot_, msg = self._make("<@&222>  status")
+        prefixes = bot_module._command_prefix(bot_, msg)
+        self.assertEqual(self._parse_command_word(prefixes, msg.content), "status")
+
+    def test_bang_prefix_still_parses(self):
+        from src import bot as bot_module
+
+        bot_, msg = self._make("!logs")
+        prefixes = bot_module._command_prefix(bot_, msg)
+        self.assertEqual(self._parse_command_word(prefixes, msg.content), "logs")
