@@ -10,7 +10,7 @@ A single-process Python service that bridges Discord commands to the Docker daem
 
 | Layer | Technology |
 |---|---|
-| Bot framework | `discord.py` (prefix `!` commands) |
+| Bot framework | `discord.py` — hybrid commands: `!` prefix + `@Bot` mention + `/` slash |
 | HTTP API | `fastapi` + `uvicorn` |
 | Docker control | `docker` SDK for Python |
 | Config | `python-dotenv` + env vars |
@@ -24,7 +24,7 @@ Pinned runtime versions live in [requirements.txt](requirements.txt); [requireme
 
 ```
 src/
-  bot.py             — Discord bot, command handlers, crash loop, main()
+  bot.py             — Discord bot, hybrid command handlers, slash-command sync (setup_hook), crash loop, main()
   api.py             — FastAPI app (/ redirect, /status) with token auth
   config.py          — Env var parsing + fail-fast validation
   docker_control.py  — Docker SDK wrappers; container-name allowlist + message sanitizer
@@ -73,8 +73,24 @@ A single lazily-constructed `_docker_client` is reused for the lifetime of the p
 - **Ping control:** The bot is constructed with `AllowedMentions.none()` so no handler can accidentally ping @everyone or arbitrary users. `send_announcement` re-enables mentions for exactly `ANNOUNCE_ROLE_ID` (via `AllowedMentions(roles=[Object(id=ANNOUNCE_ROLE_ID)])`) when it's set, and `AllowedMentions.none()` otherwise — never a blanket `roles=True`, since announcement content can include user-supplied text (e.g. a `!maintenance` reason) that must not be able to ping an arbitrary role.
 - **Status API token** is compared with `secrets.compare_digest` to prevent timing attacks. The `/healthz` endpoint is intentionally unauthenticated — it is used by the Docker healthcheck and external uptime monitors.
 - **Log redaction** is implemented at the handler level (`_RedactingFilter` in [src/logging_config.py](src/logging_config.py)) so every handler strips `BOT_TOKEN` and `STATUS_TOKEN` — not just the root logger.
-- **Guild lock** (`DISCORD_GUILD_ID`) and **channel lock** (`ALLOWED_CHANNEL_IDS`) are enforced by `_origin_allowed()` in [src/bot.py](src/bot.py). The global `@bot.check` (`check_guild`) calls it and raises `SilentCheckFailure` — a `commands.CheckFailure` subclass `on_command_error` recognizes and silently ignores — for DMs (no guild), foreign-guild, and disallowed-channel commands, so none of these origins get any response. A genuine role/permission denial in the home guild still gets the "you do not have permission" message. `@bot.check` predicates only run for *registered* commands, though — `CommandNotFound` (e.g. a typo'd `!perm` command) fires before any check runs, so `on_command_error`'s `CommandNotFound` branch calls `_origin_allowed()` itself before touching `ctx.author.guild_permissions` (which doesn't exist on a DM's `discord.User`). This is why the check is factored into a standalone function rather than inlined in `check_guild` — both call sites need it and must not drift apart.
+- **Guild lock** (`DISCORD_GUILD_ID`) and **channel lock** (`ALLOWED_CHANNEL_IDS`) are enforced by `_origin_allowed()` in [src/bot.py](src/bot.py). The global `@bot.check` (`check_guild`) calls it and raises `SilentCheckFailure` — a `commands.CheckFailure` subclass `on_command_error` recognizes and silently ignores **on the text path** — for DMs (no guild), foreign-guild, and disallowed-channel commands, so none of these origins get any response. A genuine role/permission denial in the home guild still gets the "you do not have permission" message. `@bot.check` predicates only run for *registered* commands, though — `CommandNotFound` (e.g. a typo'd `!perm` command) fires before any check runs, so `on_command_error`'s `CommandNotFound` branch calls `_origin_allowed()` itself before touching `ctx.author.guild_permissions` (which doesn't exist on a DM's `discord.User`). It uses `ctx.invoked_with` (the prefix-stripped command name) rather than interpolating `bot.command_prefix`, which is now the `when_mentioned_or("!")` **callable** (a leftover f-string interpolation of it would never match). This is why the check is factored into a standalone function rather than inlined in `check_guild` — both call sites need it and must not drift apart.
+  - **Slash exception to the "silent" rule:** an *unacknowledged* slash interaction makes Discord show the user "This interaction failed", which is a worse presence signal than a quiet refusal. So when `SilentCheckFailure` fires and `ctx.interaction is not None` (a `/` invocation), `on_command_error` acknowledges with an **ephemeral** "This command isn't available here." instead of staying silent. This is not a leak: slash commands are synced guild-wide (see command surface below), so they are already visible in a disallowed *channel* of the home guild. The text path stays fully silent as before.
 - **Admin bypass:** Discord's `Administrator` permission always short-circuits `has_permission` checks.
+
+### Command surface (text + mention + slash)
+
+Every command is a **hybrid command** (`@bot.hybrid_command` / `@bot.hybrid_group`), so one callback serves all three invocation styles from a single implementation:
+
+- **`!` prefix** and **`@Bot` mention** — both are text commands. The bot's `command_prefix` is `commands.when_mentioned_or("!")`, so a mention is just another prefix; the same parser, `Context`, checks, and cooldowns apply. (`help` stays text-only — it's discord.py's built-in, not a hybrid command.)
+- **`/` slash** — registered as application commands in `bot.tree` and published by `bot.setup_hook` (`_setup_hook` in [src/bot.py](src/bot.py)). Sync happens **once** in `setup_hook` (not `on_ready`, which can re-fire on reconnect and risks sync rate limits). A guild-locked bot (`DISCORD_GUILD_ID` set) does `copy_global_to(guild)` + `sync(guild=…)` — **instant** propagation; the `ALLOW_ANY_GUILD` path does a global `sync()`, which can take ~1h and makes commands appear in every server the bot is in. A sync failure is caught and logged, never fatal — the text/mention paths work without it.
+
+Three constraints the slash path imposes on handler code:
+
+- **No `*args`.** Slash commands need a declared parameter schema, so `stop`/`restart` expose explicit `container: str = None, now: str = None` params and **reconstruct the free-form token tuple** that `_delayed_container_op` parses. This preserves every text ordering (`!stop`, `!stop now`, `!stop <c>`, `!stop <c> now`, `!stop now <c>`) while giving slash users labeled fields. `now` is deliberately a **string, not a bool**: a bool param would make discord.py's converter reject the literal token `now` on the text path (e.g. `!stop server1 now`), breaking backward compatibility.
+- **3-second interaction deadline.** A slash command must be acknowledged within 3s. Handlers that do a blocking Docker round trip (via `run_blocking`) before their first reply call `await _defer(ctx)` first. `_defer` is a no-op for text commands (no such deadline) and when the interaction is already acked.
+- **`ctx.message` is `None` for slash.** Anything reading `ctx.message.*` must guard it — `on_command` logs `ctx.message.content if ctx.message else f"/{ctx.command} (slash)"`. (The `CommandNotFound` branch's old `ctx.message.content` read only ever runs on the text path, and now uses `ctx.invoked_with` anyway.)
+
+Slash parameter hints come from `@app_commands.describe(...)` on each command — the main UX payoff of the slash surface. Adding `applications.commands` to the bot's OAuth invite scope is required for `/` commands to appear (see [README.md](README.md)).
 
 ### Docker operations
 

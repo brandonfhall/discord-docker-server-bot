@@ -689,6 +689,26 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
         self.assertIn("start", output)
         self.assertIn("Admin", output)
 
+    async def test_perm_subcommands_require_admin(self):
+        """Every perm subcommand must carry its own administrator check, not rely
+        solely on the parent group's -- otherwise a non-admin's /perm add could slip
+        through if the hybrid slash bridge doesn't walk parent-group checks the way
+        the text path does (a privilege-escalation risk on the permission store)."""
+        from src import bot as bot_module
+        from discord.ext import commands
+
+        for cmd in (bot_module.perm_add, bot_module.perm_remove, bot_module.perm_list):
+            self.assertTrue(cmd.checks, f"{cmd.name} has no admin check of its own")
+            non_admin = MagicMock()
+            non_admin.permissions.administrator = False
+            with self.assertRaises(commands.MissingPermissions):
+                for predicate in cmd.checks:
+                    predicate(non_admin)
+            admin = MagicMock()
+            admin.permissions.administrator = True
+            for predicate in cmd.checks:
+                self.assertTrue(predicate(admin))
+
     # --- announce_error handler ---
 
     async def test_announce_error_missing_arg(self):
@@ -900,7 +920,10 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
-        ctx.message.content = "!perm badsubcmd"
+        # ctx.invoked_with is the attempted command name, already stripped of
+        # whatever prefix matched -- so this covers both "!perm ..." and the
+        # "@Bot perm ..." mention form identically.
+        ctx.invoked_with = "perm"
         ctx.guild.id = 1
         ctx.channel.id = 1
         ctx.author.guild_permissions.administrator = True
@@ -917,7 +940,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
-        ctx.message.content = "!perm badsubcmd"
+        ctx.invoked_with = "perm"
         ctx.guild.id = 1
         ctx.channel.id = 1
         ctx.author.guild_permissions.administrator = False
@@ -933,7 +956,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
-        ctx.message.content = "!unknowncmd"
+        ctx.invoked_with = "unknowncmd"
         error = commands.CommandNotFound("unknowncmd")
         with patch.object(bot_module, "ALLOWED_CHANNEL_IDS", []):
             await bot_module.on_command_error(ctx, error)
@@ -948,7 +971,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
-        ctx.message.content = "!perm badsubcmd"
+        ctx.invoked_with = "perm"
         ctx.guild = None
         del ctx.author.guild_permissions  # a bare MagicMock would auto-create it and mask the bug
         error = commands.CommandNotFound("perm badsubcmd")
@@ -964,7 +987,7 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
-        ctx.message.content = "!perm badsubcmd"
+        ctx.invoked_with = "perm"
         ctx.guild.id = 999
         ctx.author.guild_permissions.administrator = True
         error = commands.CommandNotFound("perm badsubcmd")
@@ -1000,16 +1023,36 @@ class TestBotLogic(unittest.IsolatedAsyncioTestCase):
 
     async def test_on_command_error_silent_in_disallowed_channel(self):
         """SilentCheckFailure (as raised by check_guild for a disallowed origin)
-        should produce no response."""
+        on the TEXT path (ctx.interaction is None) should produce no response --
+        replying would leak the bot's presence."""
         from src import bot as bot_module
 
         ctx = MagicMock()
         ctx.send = AsyncMock()
         ctx.channel.id = 999
         ctx.command = MagicMock()
+        ctx.interaction = None  # text command, not a slash interaction
         error = bot_module.SilentCheckFailure("not allowed")
         await bot_module.on_command_error(ctx, error)
         ctx.send.assert_not_called()
+
+    async def test_on_command_error_slash_disallowed_channel_acks_ephemerally(self):
+        """SilentCheckFailure on the SLASH path (ctx.interaction is not None) must
+        acknowledge the interaction with an ephemeral refusal -- an unacknowledged
+        interaction makes Discord show the user 'This interaction failed'. Not a
+        presence leak: slash commands are synced guild-wide and are already visible
+        in the disallowed channel of the home guild."""
+        from src import bot as bot_module
+
+        ctx = MagicMock()
+        ctx.send = AsyncMock()
+        ctx.channel.id = 999
+        ctx.command = MagicMock()
+        ctx.interaction = MagicMock()  # slash invocation
+        error = bot_module.SilentCheckFailure("not allowed")
+        await bot_module.on_command_error(ctx, error)
+        ctx.send.assert_called_once()
+        self.assertTrue(ctx.send.call_args.kwargs.get("ephemeral"))
 
     async def test_on_command_error_responds_in_allowed_channel(self):
         """CheckFailure from an allowed channel (role denied) should still respond."""

@@ -5,6 +5,7 @@ import threading
 from datetime import datetime, timezone
 
 import discord
+from discord import app_commands
 from discord.ext import commands, tasks
 
 from . import docker_control, history, permissions
@@ -41,11 +42,43 @@ intents.message_content = True
 intents.guilds = True
 intents.members = True
 
+# when_mentioned_or keeps the "!" prefix while also accepting "@Bot <command>",
+# so text commands work via both a literal prefix and an @-mention. Slash (/)
+# commands are a separate mechanism (app_commands, registered below in
+# _setup_hook) and need no prefix or mention at all.
 bot = commands.Bot(
-    command_prefix="!",
+    command_prefix=commands.when_mentioned_or("!"),
     intents=intents,
     allowed_mentions=discord.AllowedMentions.none(),
 )
+
+
+async def _setup_hook():
+    """Register slash (application) commands with Discord.
+
+    Runs once before the gateway connection is established (unlike on_ready,
+    which can fire repeatedly on reconnect -- re-syncing every reconnect risks
+    rate limits). Every hybrid command doubles as an app command; syncing
+    publishes them. A guild-locked bot syncs to that one guild, which is
+    instant; a global sync (the ALLOW_ANY_GUILD path) can take up to ~1 hour to
+    propagate and makes the commands appear in every server the bot is in.
+    """
+    try:
+        if DISCORD_GUILD_ID:
+            guild = discord.Object(id=DISCORD_GUILD_ID)
+            bot.tree.copy_global_to(guild=guild)
+            await bot.tree.sync(guild=guild)
+            logging.info(f"Synced slash commands to guild {DISCORD_GUILD_ID}")
+        else:
+            await bot.tree.sync()
+            logging.info("Synced slash commands globally (propagation may take up to ~1h)")
+    except Exception as e:
+        # A sync failure must not take the bot down -- the "!"/mention text
+        # commands still work without it; only the slash surface is affected.
+        logging.error(f"Failed to sync slash commands: {e}", exc_info=True)
+
+
+bot.setup_hook = _setup_hook
 
 
 class SilentCheckFailure(commands.CheckFailure):
@@ -102,6 +135,20 @@ async def _bail_if_maintenance(ctx) -> bool:
         await ctx.send(f"Bot is in maintenance mode. {state.maintenance_reason}")
         return True
     return False
+
+
+async def _defer(ctx):
+    """Ack a slash interaction early so a slow handler doesn't blow Discord's
+    3-second interaction deadline (several handlers do a blocking Docker round
+    trip via run_blocking before their first reply). No-op for text commands,
+    which have no such deadline, and a no-op if the interaction is already
+    acknowledged.
+    """
+    if ctx.interaction is not None and not ctx.interaction.response.is_done():
+        try:
+            await ctx.defer()
+        except discord.HTTPException:
+            pass
 
 
 async def resolve_container(ctx, name: str):
@@ -168,7 +215,11 @@ async def on_ready():
 
 @bot.event
 async def on_command(ctx):
-    logging.info(f"Command received: '{ctx.message.content}' from {ctx.author} ({ctx.author.id})")
+    # ctx.message is None for a slash-invoked hybrid command (there's no
+    # underlying message), so guard it -- dereferencing .content would raise on
+    # every slash invocation.
+    invoked = ctx.message.content if ctx.message else f"/{ctx.command} (slash)"
+    logging.info(f"Command received: '{invoked}' from {ctx.author} ({ctx.author.id})")
 
 
 @bot.event
@@ -185,8 +236,17 @@ async def on_message(message):
 @bot.event
 async def on_command_error(ctx, error):
     if isinstance(error, SilentCheckFailure):
-        # Disallowed origin (DM, foreign guild, or disallowed channel) — never respond,
-        # so as not to leak the bot's presence.
+        # Disallowed origin (DM, foreign guild, or disallowed channel).
+        # Text path: never respond, so as not to leak the bot's presence.
+        # Slash path: an unacknowledged interaction makes Discord show the user
+        # "This interaction failed", so we must ack. Slash commands are synced
+        # guild-wide and are visible in disallowed *channels* of the home guild,
+        # so an ephemeral refusal there is expected, not a presence leak.
+        if ctx.interaction is not None:
+            try:
+                await ctx.send("This command isn't available here.", ephemeral=True)
+            except Exception:
+                pass
         return
     if isinstance(error, commands.CheckFailure):
         logging.warning(f"Permission denied for user {ctx.author} on command {ctx.command}")
@@ -218,8 +278,11 @@ async def on_command_error(ctx, error):
         # ctx.author.guild_permissions doesn't exist in a DM, and skipping the
         # origin check would let a typo'd !perm command leak the bot's presence
         # in a foreign guild/channel the same way M4 prevents for real commands.
-        content = ctx.message.content or ""
-        if content.startswith(f"{bot.command_prefix}perm") and _origin_allowed(ctx):
+        # Use ctx.invoked_with (the attempted command name, already stripped of
+        # whatever prefix matched -- "!" or an @-mention) rather than
+        # interpolating bot.command_prefix, which is now a callable
+        # (when_mentioned_or) and would never match a literal string.
+        if (ctx.invoked_with or "").lower().startswith("perm") and _origin_allowed(ctx):
             if ctx.author.guild_permissions.administrator:
                 await ctx.send("Usage: `!perm <add|remove|list> ...`")
     elif isinstance(error, commands.UserInputError):
@@ -282,11 +345,13 @@ async def _before_crash_check():
             state.last_known_status[name] = status
 
 
-@bot.command()
+@bot.hybrid_command()
+@app_commands.describe(container_name="Container to start (optional if only one is configured)")
 @has_permission("start")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def start(ctx, container_name: str = None):
     """Starts the container."""
+    await _defer(ctx)
     if await _bail_if_maintenance(ctx):
         return
     target = await resolve_container(ctx, container_name)
@@ -399,6 +464,7 @@ def _format_delay(seconds: int) -> str:
 
 async def _delayed_container_op(ctx, *args, action, now_action, docker_func, immediate_msg, countdown_msg_tpl, verb):
     """Shared logic for stop and restart commands with optional 'now' flag."""
+    await _defer(ctx)
     if await _bail_if_maintenance(ctx):
         return
 
@@ -512,11 +578,27 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
     state.pending_ops[target] = bot.loop.create_task(do_operation())
 
 
-@bot.command()
+# Slash commands can't take variadic *args, so stop/restart expose two explicit
+# optional string params and reconstruct the free-form token tuple that
+# _delayed_container_op parses. This preserves every text form and ordering --
+# "!stop", "!stop now", "!stop <container>", "!stop <container> now",
+# "!stop now <container>" -- while giving slash users labeled "container" and
+# "now" fields. Keeping "now" a plain string (not a bool) is deliberate: a bool
+# param would make discord.py's converter reject the literal token "now" on the
+# text path (e.g. "!stop server1 now"), breaking backward compatibility.
+_NOW_HELP = 'Type "now" to skip the countdown and act immediately (needs the *_now permission)'
+
+
+@bot.hybrid_command()
+@app_commands.describe(
+    container="Container to stop (optional if only one is configured)",
+    now=_NOW_HELP,
+)
 @has_permission("stop")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
-async def stop(ctx, *args):
-    """Stops the container. Use '!stop now' for immediate shutdown (requires stop_now permission)."""
+async def stop(ctx, container: str = None, now: str = None):
+    """Stops the container. Use 'now' for immediate shutdown (requires stop_now permission)."""
+    args = tuple(a for a in (container, now) if a is not None)
     await _delayed_container_op(
         ctx,
         *args,
@@ -529,11 +611,16 @@ async def stop(ctx, *args):
     )
 
 
-@bot.command()
+@bot.hybrid_command()
+@app_commands.describe(
+    container="Container to restart (optional if only one is configured)",
+    now=_NOW_HELP,
+)
 @has_permission("restart")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
-async def restart(ctx, *args):
-    """Restarts the container (with countdown). Use '!restart now' for immediate restart (requires restart_now permission)."""
+async def restart(ctx, container: str = None, now: str = None):
+    """Restarts the container (with countdown). Use 'now' for immediate restart (requires restart_now permission)."""
+    args = tuple(a for a in (container, now) if a is not None)
     await _delayed_container_op(
         ctx,
         *args,
@@ -546,11 +633,12 @@ async def restart(ctx, *args):
     )
 
 
-@bot.command()
+@bot.hybrid_command()
 @has_permission("cancel")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def cancel(ctx):
     """Cancels all pending stop/restart countdowns across every container."""
+    await _defer(ctx)
     cancelled = state.cancel_all_pending()
     logging.info(f"User {ctx.author} requested CANCEL of pending operations")
     await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "cancel", "")
@@ -562,10 +650,12 @@ async def cancel(ctx):
     await send_announcement(ctx, "**Scheduled shutdown/restart has been cancelled.**")
 
 
-@bot.command(name="status")
+@bot.hybrid_command(name="status")
+@app_commands.describe(container_name="Container to check (optional if only one is configured)")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def status_cmd(ctx, container_name: str = None):
     """Checks the container status and any pending operations."""
+    await _defer(ctx)
     # Deliberately not recorded to HISTORY_FILE, unlike logs/stats: !status is
     # expected to be checked far more often (routine "is it up?" polling) and
     # would otherwise flood the audit log with low-value entries.
@@ -605,7 +695,11 @@ async def status_cmd(ctx, container_name: str = None):
     await ctx.send("\n".join(lines))
 
 
-@bot.command()
+@bot.hybrid_command()
+@app_commands.describe(
+    arg1="Container name, or the first word of the message if only one container is configured",
+    arg2="The message to send (when the first argument is a container name)",
+)
 @has_permission("announce")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def announce(ctx, arg1: str, *, arg2: str = None):
@@ -614,6 +708,7 @@ async def announce(ctx, arg1: str, *, arg2: str = None):
     Usage: !announce <message> (if single container)
            !announce <container_name> <message> (if multiple)
     """
+    await _defer(ctx)
     if await _bail_if_maintenance(ctx):
         return
     target = None
@@ -643,7 +738,7 @@ async def announce_error(ctx, error):
         await on_command_error(ctx, error)
 
 
-@bot.command(name="guide")
+@bot.hybrid_command(name="guide")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def guide(ctx):
     """Shows a simple usage guide."""
@@ -675,11 +770,16 @@ async def guide(ctx):
     await ctx.send("\n".join(lines))
 
 
-@bot.command(name="logs")
+@bot.hybrid_command(name="logs")
+@app_commands.describe(
+    arg1="Container name, or a line count if only one container is configured",
+    arg2="Number of lines to show (max 50)",
+)
 @has_permission("logs")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
     """View recent container logs. Usage: !logs [container] [lines]"""
+    await _defer(ctx)
     # L5: checked first, before arg-parsing, for consistency with every other
     # maintenance-gated handler (start, _delayed_container_op, announce, stats).
     if await _bail_if_maintenance(ctx):
@@ -722,11 +822,13 @@ async def logs_cmd(ctx, arg1: str = None, arg2: str = None):
     await ctx.send(f"**Logs for {target}** (last {lines} lines):\n```\n{output}\n```")
 
 
-@bot.command(name="stats")
+@bot.hybrid_command(name="stats")
+@app_commands.describe(container_name="Container to inspect (optional if only one is configured)")
 @has_permission("stats")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def stats_cmd(ctx, container_name: str = None):
     """Show container CPU and memory usage."""
+    await _defer(ctx)
     if await _bail_if_maintenance(ctx):
         return
     target = await resolve_container(ctx, container_name)
@@ -752,11 +854,13 @@ async def stats_cmd(ctx, container_name: str = None):
     await ctx.send("\n".join(lines))
 
 
-@bot.command(name="history")
+@bot.hybrid_command(name="history")
+@app_commands.describe(count="How many recent entries to show (max 25)")
 @has_permission("history")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def history_cmd(ctx, count: int = 10):
     """View recent command history. Usage: !history [count]"""
+    await _defer(ctx)
     logging.info(f"User {ctx.author} requested HISTORY")
     count = max(1, min(count, 25))
     entries = await docker_control.run_blocking(history.load, HISTORY_FILE)
@@ -780,13 +884,18 @@ async def history_cmd(ctx, count: int = 10):
     await ctx.send(output)
 
 
-@bot.command(name="maintenance")
+@bot.hybrid_command(name="maintenance")
+@app_commands.describe(
+    toggle='"on" or "off" (omit to show current status)',
+    reason="Optional reason shown to users while maintenance mode is on",
+)
 @has_permission("maintenance")
 # Intentionally no @commands.cooldown: during an active incident an admin must be
 # able to toggle maintenance mode again immediately (e.g. on/off/on to adjust the
 # reason), without waiting out a per-user cooldown.
 async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
     """Toggle maintenance mode. Usage: !maintenance on/off [reason]"""
+    await _defer(ctx)
     if toggle is None:
         status = "ON" if state.maintenance_mode else "OFF"
         await ctx.send(
@@ -820,7 +929,13 @@ async def maintenance_cmd(ctx, toggle: str = None, *, reason: str = ""):
         await ctx.send("Usage: `!maintenance on [reason]` or `!maintenance off`")
 
 
-@bot.group()
+# default_permissions hides /perm from non-admins in Discord's slash picker, but
+# that's a UI hint only -- the @commands.has_permissions checks below are the
+# actual security boundary and are applied to every subcommand explicitly (not
+# just the group) so a non-admin's /perm add is denied regardless of whether the
+# hybrid slash bridge walks parent-group checks the same way the text path does.
+@bot.hybrid_group()
+@app_commands.default_permissions(administrator=True)
 @commands.has_permissions(administrator=True)
 async def perm(ctx):
     """Manages permissions (Admins only)."""
@@ -829,8 +944,11 @@ async def perm(ctx):
 
 
 @perm.command(name="add")
+@app_commands.describe(action="Permission action to grant", role_name="Discord role name")
+@commands.has_permissions(administrator=True)
 async def perm_add(ctx, action: str, *, role_name: str):
     """Adds a role to an action."""
+    await _defer(ctx)
     if action not in VALID_ACTIONS:
         await ctx.send(f"Unknown action `{action}`. Valid actions: {', '.join(sorted(VALID_ACTIONS))}")
         return
@@ -841,8 +959,11 @@ async def perm_add(ctx, action: str, *, role_name: str):
 
 
 @perm.command(name="remove")
+@app_commands.describe(action="Permission action to revoke", role_name="Discord role name")
+@commands.has_permissions(administrator=True)
 async def perm_remove(ctx, action: str, *, role_name: str):
     """Removes a role from an action."""
+    await _defer(ctx)
     if action not in VALID_ACTIONS:
         await ctx.send(f"Unknown action `{action}`. Valid actions: {', '.join(sorted(VALID_ACTIONS))}")
         return
@@ -853,8 +974,10 @@ async def perm_remove(ctx, action: str, *, role_name: str):
 
 
 @perm.command(name="list")
+@commands.has_permissions(administrator=True)
 async def perm_list(ctx):
     """Lists all permissions."""
+    await _defer(ctx)
     logging.info(f"User {ctx.author} requested PERM LIST")
     data = await docker_control.run_blocking(permissions.list_permissions)
     lines = [f"{k}: {', '.join(v)}" for k, v in data.items()]

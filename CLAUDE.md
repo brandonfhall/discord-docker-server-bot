@@ -49,7 +49,7 @@ Test env vars (`BOT_TOKEN`, `ALLOWED_CONTAINERS`, `DISCORD_GUILD_ID`) are set by
 
 ## Adding a new command
 
-1. Add the handler to [src/bot.py](src/bot.py) with `@bot.command()` and (if privileged) `@has_permission("<action>")`.
+1. Add the handler to [src/bot.py](src/bot.py) with `@bot.hybrid_command()` (so it works as a `!`/`@Bot`/`/` command) and (if privileged) `@has_permission("<action>")`. Add `@app_commands.describe(...)` for slash parameter hints, and `await _defer(ctx)` as the first line if the handler does a `run_blocking` Docker call before its first reply (slash commands must ack within 3s). Slash commands can't take `*args` — use explicit typed params. Don't read `ctx.message.*` without guarding for `None` (slash has no message).
 2. Add `@commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)` unless there's a reason not to.
 3. If the command introduces a new permission action, add it to `ALL_ACTIONS` in [src/permissions.py](src/permissions.py) (single source of truth — `bot.py` re-exports it as `VALID_ACTIONS`).
 4. Call `await docker_control.run_blocking(history.record, HISTORY_FILE, ctx.author, "<action>", target)` for auditable actions.

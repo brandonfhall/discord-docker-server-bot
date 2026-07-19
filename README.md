@@ -3,10 +3,11 @@
 [![Tests](https://github.com/brandonfhall/discord-docker-server-bot/actions/workflows/tests.yaml/badge.svg)](https://github.com/brandonfhall/discord-docker-server-bot/actions/workflows/tests.yaml)
 [![Docker Hub](https://img.shields.io/docker/v/brandonh317/discord-docker-bot?label=Docker%20Hub)](https://hub.docker.com/r/brandonh317/discord-docker-bot)
 
-A Discord bot that controls Docker containers (game servers, services, etc.) through `!` prefix commands. Manage start, stop, restart, and in-game announcements — all from Discord with role-based permissions.
+A Discord bot that controls Docker containers (game servers, services, etc.). Every command works three ways — the `!` prefix (`!start`), an @-mention (`@Bot start`), and native slash commands (`/start`) — so you can manage start, stop, restart, and in-game announcements from Discord with role-based permissions.
 
 ## Features
 
+- **Triple Command Interface** — Every command works as a `!` prefix command, an `@Bot` mention, and a native `/` slash command.
 - **Multi-Container Control** — Start, stop, and restart one or more Docker containers.
 - **Graceful Shutdowns** — Announces shutdowns/restarts in Discord and in-game, then waits a configurable delay before acting.
 - **Immediate Stop/Restart** — `!stop now` and `!restart now` bypass the countdown for emergencies (separate permissions).
@@ -40,9 +41,9 @@ docker compose up -d --build
 ### 2. Invite the Bot
 
 1. Go to **OAuth2 > URL Generator**.
-2. Scopes: `bot`.
+2. Scopes: `bot` **and** `applications.commands` (the second scope is required for `/` slash commands to appear — without it only `!` and `@Bot` mention commands work).
 3. Permissions: `Send Messages`, `Read Message History`, `View Channels` (add `Mention Everyone` if using `ANNOUNCE_ROLE_ID`).
-4. Open the generated URL to invite.
+4. Open the generated URL to invite. If you're adding slash commands to a bot that's already in your server, re-open the invite URL with the `applications.commands` scope once to authorize them.
 
 ### 3. Get IDs
 
@@ -86,7 +87,9 @@ See [.env.example](.env.example) for a copy-paste template.
 
 ## Commands
 
-All commands use the `!` prefix. Container name is optional when only one container is configured.
+Every command below can be invoked three ways: the `!` prefix (`!start`), by mentioning the bot (`@Bot start`), or as a native slash command (`/start`, chosen from Discord's command picker — no prefix or mention needed). The tables use `!` for brevity. Container name is optional when only one container is configured.
+
+For slash commands, the optional container and the `now` flag are separate fields (e.g. `/stop container:myserver now:now`); the `!`/mention forms keep the free-form syntax shown below (`!stop myserver now`).
 
 ### Control
 
