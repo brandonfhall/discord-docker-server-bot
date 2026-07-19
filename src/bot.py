@@ -42,14 +42,45 @@ intents.message_content = True
 intents.guilds = True
 intents.members = True
 
-# when_mentioned_or keeps the "!" prefix while also accepting "@Bot <command>",
-# so text commands work via both a literal prefix and an @-mention. Slash (/)
-# commands are a separate mechanism (app_commands, registered below in
-# _setup_hook) and need no prefix or mention at all.
+
+def _command_prefix(bot_, message):
+    """Prefixes that trigger a text command: literal "!", an @-mention of the bot
+    user, and an @-mention of the bot's own managed integration role.
+
+    The role case matters in practice: when a bot is added to a server, Discord
+    auto-creates a managed role with the bot's name, and typing "@BotName" often
+    resolves to that *role* (`<@&role_id>`) rather than the bot *user*
+    (`<@user_id>`) -- they're visually identical in the picker. `when_mentioned`
+    only covers the user mention, so without this a natural "@BotName command"
+    would silently do nothing. We accept both so either autocomplete choice works.
+    """
+    prefixes = commands.when_mentioned_or("!")(bot_, message)
+    guild = message.guild
+    if guild is not None and guild.me is not None:
+        for role in guild.me.roles:
+            # Only the bot's own managed role -- guild.me.roles only contains roles
+            # assigned to this bot, and is_bot_managed() picks its integration role.
+            if role.is_bot_managed():
+                prefixes.append(f"<@&{role.id}> ")
+    return prefixes
+
+
+# The prefix accepts a literal "!" and "@Bot <command>" (user or role mention),
+# so text commands work via all of those. Slash (/) commands are a separate
+# mechanism (app_commands, registered below in _setup_hook) needing no prefix.
+#
+# strip_after_prefix=True is essential for the mention prefix: Discord sends a
+# mention pill followed by the pill's own trailing space *plus* the user's typed
+# space, so "@Bot start" arrives as "<@id>  start" (two spaces). Without this,
+# discord.py's default (False) strips only the single space in the matched
+# prefix, leaving the parsed command name empty -> CommandNotFound -> the command
+# silently does nothing. True makes it skip the remaining whitespace after the
+# prefix, so "@Bot start" parses to the "start" command. (No effect on "!start".)
 bot = commands.Bot(
-    command_prefix=commands.when_mentioned_or("!"),
+    command_prefix=_command_prefix,
     intents=intents,
     allowed_mentions=discord.AllowedMentions.none(),
+    strip_after_prefix=True,
 )
 
 
@@ -215,10 +246,10 @@ async def on_ready():
 
 @bot.event
 async def on_command(ctx):
-    # ctx.message is None for a slash-invoked hybrid command (there's no
-    # underlying message), so guard it -- dereferencing .content would raise on
-    # every slash invocation.
-    invoked = ctx.message.content if ctx.message else f"/{ctx.command} (slash)"
+    # A slash-invoked hybrid command carries a synthetic ctx.message with empty
+    # content (it's not None), so detect the interaction path via ctx.interaction
+    # rather than truthiness of ctx.message.
+    invoked = f"/{ctx.command} (slash)" if ctx.interaction is not None else ctx.message.content
     logging.info(f"Command received: '{invoked}' from {ctx.author} ({ctx.author.id})")
 
 

@@ -2344,3 +2344,91 @@ class TestSlashCommandValidity(unittest.IsolatedAsyncioTestCase):
         pattern = re.compile(r"^[a-z0-9_-]{1,32}$")
         for cmd in self._walk(bot_module.bot.tree.get_commands()):
             self.assertRegex(cmd.name, pattern, f"'{cmd.qualified_name}' has an invalid slash command name")
+
+
+class TestMentionPrefix(unittest.IsolatedAsyncioTestCase):
+    """Guards the @-mention command prefix, which has two live-only failure modes
+    that unit tests otherwise miss (no gateway, no real message parsing):
+    1. Discord sends "@Bot start" as "<@id>  start" (mention pill's own space plus
+       the user's typed space); without strip_after_prefix=True the parsed command
+       name is empty and the command silently does nothing.
+    2. "@BotName" in the picker often resolves to the bot's auto-created managed
+       *role* (<@&role_id>), not the bot *user* (<@user_id>); the prefix must
+       accept both.
+    """
+
+    def _make(self, content, bot_id=111, role_id=222, managed=True):
+        bot_ = MagicMock()
+        bot_.user.id = bot_id
+        msg = MagicMock()
+        msg.content = content
+        role = MagicMock()
+        role.id = role_id
+        role.is_bot_managed.return_value = managed
+        msg.guild.me.roles = [role]
+        return bot_, msg
+
+    def _parse_command_word(self, prefixes, content):
+        from discord.ext.commands.view import StringView
+        import discord.utils as u
+
+        from src import bot as bot_module
+
+        view = StringView(content)
+        matched = u.find(view.skip_string, prefixes)
+        if matched is None:
+            return None
+        if bot_module.bot.strip_after_prefix:
+            view.skip_ws()
+        return view.get_word()
+
+    def test_prefix_includes_user_nick_and_managed_role(self):
+        from src import bot as bot_module
+
+        bot_, msg = self._make("anything")
+        prefixes = bot_module._command_prefix(bot_, msg)
+        self.assertIn("<@111> ", prefixes)
+        self.assertIn("<@!111> ", prefixes)
+        self.assertIn("!", prefixes)
+        self.assertIn("<@&222> ", prefixes)
+
+    def test_non_managed_role_is_not_a_prefix(self):
+        from src import bot as bot_module
+
+        bot_, msg = self._make("anything", managed=False)
+        prefixes = bot_module._command_prefix(bot_, msg)
+        self.assertNotIn("<@&222> ", prefixes)
+
+    def test_dm_message_has_no_role_prefix_and_does_not_crash(self):
+        from src import bot as bot_module
+
+        bot_ = MagicMock()
+        bot_.user.id = 111
+        msg = MagicMock()
+        msg.content = "anything"
+        msg.guild = None  # DM
+        prefixes = bot_module._command_prefix(bot_, msg)
+        self.assertIn("!", prefixes)
+        self.assertIn("<@111> ", prefixes)
+
+    def test_double_space_user_mention_parses_to_command(self):
+        from src import bot as bot_module
+
+        self.assertTrue(bot_module.bot.strip_after_prefix, "strip_after_prefix must stay True for mention parsing")
+        bot_, msg = self._make("<@111>  start")
+        prefixes = bot_module._command_prefix(bot_, msg)
+        self.assertEqual(self._parse_command_word(prefixes, msg.content), "start")
+
+    def test_double_space_role_mention_parses_to_command(self):
+        from src import bot as bot_module
+
+        bot_, msg = self._make("<@&222>  status")
+        prefixes = bot_module._command_prefix(bot_, msg)
+        self.assertEqual(self._parse_command_word(prefixes, msg.content), "status")
+
+    def test_bang_prefix_still_parses(self):
+        from src import bot as bot_module
+
+        bot_, msg = self._make("!logs")
+        prefixes = bot_module._command_prefix(bot_, msg)
+        self.assertEqual(self._parse_command_word(prefixes, msg.content), "logs")
