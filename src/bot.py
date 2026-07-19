@@ -619,7 +619,7 @@ async def stop(ctx, container: str = None, now: str = None):
 @has_permission("restart")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def restart(ctx, container: str = None, now: str = None):
-    """Restarts the container (with countdown). Use 'now' for immediate restart (requires restart_now permission)."""
+    """Restart the container (with countdown). Use 'now' to restart immediately (needs restart_now)."""
     args = tuple(a for a in (container, now) if a is not None)
     await _delayed_container_op(
         ctx,

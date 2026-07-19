@@ -2301,3 +2301,46 @@ class TestGuideUpdated(unittest.IsolatedAsyncioTestCase):
         self.assertIn("!history", output)
         self.assertIn("!maintenance", output)
         self.assertIn("!restart now", output)
+
+
+class TestSlashCommandValidity(unittest.IsolatedAsyncioTestCase):
+    """Discord rejects the whole slash-command sync (HTTP 400 / code 50035) if any
+    command/parameter description exceeds 100 chars or a name is malformed. That
+    failure only surfaces against a live gateway, so these unit checks guard the
+    limits statically -- a too-long docstring (which becomes a slash description)
+    would otherwise break slash sync in production while every other test stays green.
+    """
+
+    def _walk(self, cmds):
+        for c in cmds:
+            yield c
+            subs = getattr(c, "commands", None)
+            if subs:
+                yield from self._walk(subs)
+
+    def test_all_descriptions_within_discord_limit(self):
+        from src import bot as bot_module
+
+        for cmd in self._walk(bot_module.bot.tree.get_commands()):
+            desc = getattr(cmd, "description", "") or ""
+            self.assertLessEqual(
+                len(desc), 100, f"slash command '{cmd.qualified_name}' description is {len(desc)} chars (max 100)"
+            )
+            params = getattr(cmd, "parameters", None) or getattr(cmd, "_params", {}).values()
+            for p in params:
+                pdesc = getattr(p, "description", "") or ""
+                self.assertLessEqual(
+                    len(pdesc),
+                    100,
+                    f"param '{p.name}' of '{cmd.qualified_name}' description is {len(pdesc)} chars (max 100)",
+                )
+
+    def test_all_command_names_are_valid_slash_names(self):
+        import re
+
+        from src import bot as bot_module
+
+        # Discord slash names: 1-32 chars, lowercase, letters/digits/_/- only.
+        pattern = re.compile(r"^[a-z0-9_-]{1,32}$")
+        for cmd in self._walk(bot_module.bot.tree.get_commands()):
+            self.assertRegex(cmd.name, pattern, f"'{cmd.qualified_name}' has an invalid slash command name")
