@@ -20,6 +20,8 @@ A single-process Python service that bridges Discord commands to the Docker daem
 
 Pinned runtime versions live in [requirements.txt](requirements.txt); [requirements-dev.txt](requirements-dev.txt) adds `httpx` (for FastAPI's `TestClient`), `pytest`, `pytest-cov`, and `ruff` on top via `-r requirements.txt`, and is what CI and local dev install. Python is pinned to **3.14** in both the Dockerfile and CI.
 
+`[tool.ruff.format]` in [pyproject.toml](pyproject.toml) sets `exclude = ["*.md"]`. As of ruff 0.16, `ruff format` also formats Python code blocks *inside* Markdown, and our docs deliberately carry fragmentary snippets — [docs/slash-and-mention-commands-discovery.md](docs/slash-and-mention-commands-discovery.md) shows a bare `command_prefix="!",` kwarg, which the formatter parses as a standalone statement and rewrites to the semantically wrong `command_prefix = ("!",)`. Prose is not source; don't drop the exclusion to make a `ruff format --check` failure go away. Lint (`ruff check`) is unaffected — it never read Markdown.
+
 ## Directory layout
 
 ```
