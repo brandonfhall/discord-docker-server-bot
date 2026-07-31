@@ -13,3 +13,8 @@ max-complexity = 10
 [tool.ruff.format]
 quote-style = "double"
 indent-style = "space"
+# ruff 0.16 formats Python code blocks inside Markdown. Our docs deliberately
+# contain fragmentary snippets (e.g. a bare `command_prefix="!",` kwarg), which
+# the formatter parses as standalone code and rewrites into something wrong
+# (`command_prefix = ("!",)`). Prose is not source — leave it alone.
+exclude = ["*.md"]
