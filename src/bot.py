@@ -617,7 +617,16 @@ async def _delayed_container_op(ctx, *args, action, now_action, docker_func, imm
 # "now" fields. Keeping "now" a plain string (not a bool) is deliberate: a bool
 # param would make discord.py's converter reject the literal token "now" on the
 # text path (e.g. "!stop server1 now"), breaking backward compatibility.
-_NOW_HELP = 'Type "now" to skip the countdown and act immediately (needs the *_now permission)'
+#
+# On the slash path that string is presented as a single-option dropdown via
+# @app_commands.choices, so nobody has to type the literal word "now" into a
+# field already labelled "now" (and a plausible guess like "yes"/"0" can't fall
+# through to the container-name branch). Choices constrain only the application
+# command; the text converter stays a plain str, so every "!" ordering above is
+# unaffected. The Choice *value* must stay exactly "now" -- that is the token
+# _delayed_container_op matches on.
+_NOW_HELP = "Skip the countdown and act immediately (needs the *_now permission)"
+_NOW_CHOICES = [app_commands.Choice(name="now - skip the countdown", value="now")]
 
 
 @bot.hybrid_command()
@@ -625,6 +634,7 @@ _NOW_HELP = 'Type "now" to skip the countdown and act immediately (needs the *_n
     container="Container to stop (optional if only one is configured)",
     now=_NOW_HELP,
 )
+@app_commands.choices(now=_NOW_CHOICES)
 @has_permission("stop")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def stop(ctx, container: str = None, now: str = None):
@@ -647,6 +657,7 @@ async def stop(ctx, container: str = None, now: str = None):
     container="Container to restart (optional if only one is configured)",
     now=_NOW_HELP,
 )
+@app_commands.choices(now=_NOW_CHOICES)
 @has_permission("restart")
 @commands.cooldown(1, COMMAND_COOLDOWN, commands.BucketType.user)
 async def restart(ctx, container: str = None, now: str = None):
