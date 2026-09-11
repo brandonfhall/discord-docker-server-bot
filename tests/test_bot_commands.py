@@ -1410,6 +1410,19 @@ class TestStopNow(unittest.IsolatedAsyncioTestCase):
                 task.cancel()
         state.pending_ops.clear()
 
+    def test_stop_slash_now_param_is_a_choice_valued_now(self):
+        """The slash "now" field is a single-option dropdown, so nobody has to
+        type the literal word "now" into a field already labelled "now". The
+        Choice *value* must stay exactly "now" -- that's the token
+        _delayed_container_op matches on -- and the choices must not leak into
+        the text-path converter, which has to stay a plain str so
+        "!stop now <container>" still parses."""
+        stop_cmd = self.bot_module.stop
+        now_param = next(p for p in stop_cmd.app_command.parameters if p.name == "now")
+        choices = now_param.choices
+        self.assertEqual([c.value for c in choices], ["now"])
+        self.assertIs(stop_cmd.clean_params["now"].converter, str)
+
     async def test_stop_now_immediate_as_admin(self):
         """Admin using !stop now should bypass stop_now permission and stop immediately."""
         bot_module = self.bot_module
@@ -1920,6 +1933,14 @@ class TestRestartNow(unittest.IsolatedAsyncioTestCase):
             if asyncio.isfuture(task) and not task.done():
                 task.cancel()
         state.pending_ops.clear()
+
+    def test_restart_slash_now_param_is_a_choice_valued_now(self):
+        """Same contract as the stop command's slash "now" field."""
+        restart_cmd = self.bot_module.restart
+        now_param = next(p for p in restart_cmd.app_command.parameters if p.name == "now")
+        choices = now_param.choices
+        self.assertEqual([c.value for c in choices], ["now"])
+        self.assertIs(restart_cmd.clean_params["now"].converter, str)
 
     async def test_restart_now_immediate_as_admin(self):
         bot_module = self.bot_module

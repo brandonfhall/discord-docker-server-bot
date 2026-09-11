@@ -89,7 +89,7 @@ See [.env.example](.env.example) for a copy-paste template.
 
 Every command below can be invoked three ways: the `!` prefix (`!start`), by mentioning the bot (`@Bot start`), or as a native slash command (`/start`, chosen from Discord's command picker — no prefix or mention needed). The tables use `!` for brevity. Container name is optional when only one container is configured.
 
-For slash commands, the optional container and the `now` flag are separate fields (e.g. `/stop container:myserver now:now`); the `!`/mention forms keep the free-form syntax shown below (`!stop myserver now`).
+For slash commands, the optional container and the `now` flag are separate fields; `now` is a one-option dropdown, so pick **now - skip the countdown** from the picker rather than typing anything. The `!`/mention forms keep the free-form syntax shown below (`!stop myserver now`).
 
 ### Control
 
